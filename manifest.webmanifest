@@ -1,0 +1,14 @@
+{
+  "name": "マタニティ手帳",
+  "short_name": "マタニティ",
+  "description": "妊娠から出産までをサポートするマタニティ手帳アプリ",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fff7f8",
+  "theme_color": "#f7a7b6",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

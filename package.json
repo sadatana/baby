@@ -1,0 +1,11 @@
+{
+  "name": "maternity-app",
+  "version": "1.0.0",
+  "description": "妊娠から出産までをサポートするマタニティ手帳アプリ（PWA）",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test tests/*.test.js"
+  }
+}

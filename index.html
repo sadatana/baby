@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="妊娠から出産までをサポートするマタニティ手帳アプリ">
+  <meta name="theme-color" content="#f7a7b6">
+  <title>マタニティ手帳</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">マタニティ手帳</h1>
+    <button class="icon-btn" data-action="open-settings" aria-label="設定">⚙️</button>
+  </header>
+
+  <main id="view" class="view" tabindex="-1"></main>
+
+  <nav class="tabbar" aria-label="メインメニュー">
+    <button data-tab="home" class="active"><span>🏠</span>ホーム</button>
+    <button data-tab="weeks"><span>👶</span>成長</button>
+    <button data-tab="tools"><span>⏱️</span>ツール</button>
+    <button data-tab="records"><span>📝</span>記録</button>
+    <button data-tab="lists"><span>✅</span>準備</button>
+  </nav>
+
+  <dialog id="settings" class="sheet">
+    <form id="settings-form" method="dialog">
+      <h2>設定</h2>
+      <label>出産予定日
+        <input type="date" name="dueDate">
+      </label>
+      <p class="or">または</p>
+      <label>最終月経の開始日から計算
+        <input type="date" name="lmp">
+      </label>
+      <label>赤ちゃんのニックネーム（任意）
+        <input type="text" name="babyName" maxlength="20" placeholder="例: まめちゃん">
+      </label>
+      <div class="row2">
+        <label>身長 (cm)
+          <input type="number" name="heightCm" min="100" max="220" step="0.1" inputmode="decimal">
+        </label>
+        <label>妊娠前の体重 (kg)
+          <input type="number" name="preWeightKg" min="25" max="200" step="0.1" inputmode="decimal">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-action="close-settings">キャンセル</button>
+        <button type="submit" class="btn primary">保存</button>
+      </div>
+      <details class="data-tools">
+        <summary>データの管理</summary>
+        <p class="muted">データはこの端末のブラウザ内にのみ保存されます。</p>
+        <div class="actions wrap">
+          <button type="button" class="btn ghost" data-action="export">バックアップを保存</button>
+          <label class="btn ghost file-btn">バックアップから復元
+            <input type="file" accept="application/json" data-action="import" hidden>
+          </label>
+          <button type="button" class="btn danger" data-action="reset">すべてのデータを削除</button>
+        </div>
+      </details>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
