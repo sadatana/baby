@@ -23,7 +23,16 @@ npm start        # http://localhost:8000 で起動（Python の簡易サーバ�
 npm test         # 計算ロジックのテスト
 ```
 
-GitHub Pages などの静的ホスティングにそのまま置けば、スマホのホーム画面に追加してアプリとして使えます（オフライン対応）。
+## GitHub Pages で公開
+
+公開 URL: https://sadatana.github.io/baby/
+
+`.github/workflows/pages.yml` により、デフォルトブランチに push するとテスト実行後に自動で公開されます。
+
+初回のみ、リポジトリの **Settings → Pages → Build and deployment → Source** を
+**「GitHub Actions」** に設定してください（設定後、Actions タブから「Deploy to GitHub Pages」を再実行するか、もう一度 push すると公開されます）。
+
+スマホで公開 URL を開き、「ホーム画面に追加」するとアプリとして使えます（オフライン対応）。
 
 ## ファイル構成
 
@@ -36,6 +45,7 @@ js/data.js            週ごとの情報、チェックリストなどのコン�
 js/store.js           localStorage への保存
 sw.js                 オフライン用 Service Worker
 tests/                node:test によるテスト
+.github/workflows/    GitHub Pages への自動デプロイ
 ```
 
 ## ご注意
