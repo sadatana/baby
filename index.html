@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="妊娠から出産までをサポートするマタニティ手帳アプリ">
+  <meta name="description" content="妊娠中から赤ちゃんの成長まで記録できるマタニティ手帳アプリ">
   <meta name="theme-color" content="#f7a7b6">
   <title>マタニティ手帳</title>
   <link rel="manifest" href="manifest.webmanifest">
@@ -21,15 +21,19 @@
 
   <nav class="tabbar" aria-label="メインメニュー">
     <button data-tab="home" class="active"><span>🏠</span>ホーム</button>
-    <button data-tab="weeks"><span>👶</span>成長</button>
-    <button data-tab="tools"><span>⏱️</span>ツール</button>
-    <button data-tab="records"><span>📝</span>記録</button>
+    <button data-tab="growth"><span>📈</span>成長</button>
+    <button data-tab="album"><span>📷</span>アルバム</button>
+    <button data-tab="mom"><span>🤰</span>ママ</button>
     <button data-tab="lists"><span>✅</span>準備</button>
   </nav>
 
   <dialog id="settings" class="sheet">
     <form id="settings-form" method="dialog">
       <h2>設定</h2>
+      <h3>👶 赤ちゃん</h3>
+      <label>ニックネーム・名前（任意）
+        <input type="text" name="babyName" maxlength="20" placeholder="例: まめちゃん">
+      </label>
       <label>出産予定日
         <input type="date" name="dueDate">
       </label>
@@ -37,9 +41,8 @@
       <label>最終月経の開始日から計算
         <input type="date" name="lmp">
       </label>
-      <label>赤ちゃんのニックネーム（任意）
-        <input type="text" name="babyName" maxlength="20" placeholder="例: まめちゃん">
-      </label>
+      <p><button type="button" class="btn ghost" data-action="open-birth">🎉 誕生を登録・編集</button></p>
+      <h3>🤰 ママ</h3>
       <div class="row2">
         <label>身長 (cm)
           <input type="number" name="heightCm" min="100" max="220" step="0.1" inputmode="decimal">
@@ -49,12 +52,13 @@
         </label>
       </div>
       <div class="actions">
-        <button type="button" class="btn ghost" data-action="close-settings">キャンセル</button>
+        <button type="button" class="btn ghost" data-action="close-dialog">キャンセル</button>
         <button type="submit" class="btn primary">保存</button>
       </div>
       <details class="data-tools">
         <summary>データの管理</summary>
-        <p class="muted">データはこの端末のブラウザ内にのみ保存されます。</p>
+        <p class="muted small">データはこの端末のブラウザ内にのみ保存されます。<span id="storage-usage"></span></p>
+        <p class="muted small">※ バックアップファイルには写真は含まれません。大切な写真は、写真を開いて「端末に保存」してください。</p>
         <div class="actions wrap">
           <button type="button" class="btn ghost" data-action="export">バックアップを保存</button>
           <label class="btn ghost file-btn">バックアップから復元
@@ -63,6 +67,95 @@
           <button type="button" class="btn danger" data-action="reset">すべてのデータを削除</button>
         </div>
       </details>
+    </form>
+  </dialog>
+
+  <dialog id="birth" class="sheet">
+    <form id="birth-form" method="dialog">
+      <h2>🎉 誕生の登録</h2>
+      <label>生年月日
+        <input type="date" name="birthDate" required>
+      </label>
+      <p class="muted small" id="birth-gest"></p>
+      <fieldset class="seg-field">
+        <legend>性別</legend>
+        <label><input type="radio" name="sex" value="female"><span>女の子</span></label>
+        <label><input type="radio" name="sex" value="male"><span>男の子</span></label>
+        <label><input type="radio" name="sex" value="" checked><span>未設定</span></label>
+      </fieldset>
+      <p class="muted small">性別は、発育曲線（男女別）の表示に使います。</p>
+      <h3>生まれたときの大きさ（任意）</h3>
+      <div class="row2">
+        <label>体重 (g)
+          <input type="number" name="weightG" min="300" max="6000" step="1" inputmode="numeric" placeholder="例: 3050">
+        </label>
+        <label>身長 (cm)
+          <input type="number" name="lengthCm" min="20" max="65" step="0.1" inputmode="decimal" placeholder="例: 49.5">
+        </label>
+        <label>頭囲 (cm)
+          <input type="number" name="headCm" min="15" max="45" step="0.1" inputmode="decimal">
+        </label>
+        <label>胸囲 (cm)
+          <input type="number" name="chestCm" min="15" max="45" step="0.1" inputmode="decimal">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn danger" data-action="clear-birth" id="clear-birth">登録を取り消す</button>
+        <button type="button" class="btn ghost" data-action="close-dialog">キャンセル</button>
+        <button type="submit" class="btn primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="milestone" class="sheet">
+    <form id="milestone-form" method="dialog">
+      <h2 id="milestone-title">できごとを記録</h2>
+      <input type="hidden" name="id">
+      <input type="hidden" name="templateId">
+      <label>日付
+        <input type="date" name="date" required>
+      </label>
+      <label>タイトル
+        <input type="text" name="title" maxlength="40" required placeholder="例: 初めて「ママ」と言った">
+      </label>
+      <label>メモ（任意）
+        <textarea name="note" rows="3" maxlength="1000"></textarea>
+      </label>
+      <label>写真（任意）
+        <input type="file" name="photos" accept="image/*" multiple>
+      </label>
+      <div class="actions">
+        <button type="button" class="btn danger" data-action="delete-milestone" id="delete-milestone">削除</button>
+        <button type="button" class="btn ghost" data-action="close-dialog">キャンセル</button>
+        <button type="submit" class="btn primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="viewer" class="viewer">
+    <div class="viewer-top">
+      <span id="viewer-meta"></span>
+      <button class="icon-btn" data-action="close-dialog" aria-label="閉じる">✕</button>
+    </div>
+    <div class="viewer-body">
+      <button class="icon-btn nav" data-action="viewer-prev" aria-label="前の写真">◀</button>
+      <img id="viewer-img" alt="">
+      <button class="icon-btn nav" data-action="viewer-next" aria-label="次の写真">▶</button>
+    </div>
+    <form id="viewer-form" class="viewer-form">
+      <div class="row2">
+        <label>撮影日
+          <input type="date" name="takenAt" required>
+        </label>
+        <label>ひとこと
+          <input type="text" name="caption" maxlength="100" placeholder="キャプション">
+        </label>
+      </div>
+      <div class="actions wrap">
+        <button type="submit" class="btn primary small">保存</button>
+        <button type="button" class="btn ghost small" data-action="viewer-download">端末に保存</button>
+        <button type="button" class="btn danger small" data-action="viewer-delete">削除</button>
+      </div>
     </form>
   </dialog>
 

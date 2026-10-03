@@ -4,15 +4,43 @@ import {
   contractionStats, formatDuration, weightGainGuide,
 } from './pregnancy.js';
 import { weekInfo, HOSPITAL_BAG, PROCEDURES, FOOD_NOTES, WARNING_SIGNS } from './data.js';
+import {
+  uuid, ageOf, formatAge, isBorn, periodOf, gestAtBirth, MILESTONE_TEMPLATES, milestoneTemplate,
+  buildTimeline, groupByPeriod, DAYS_PER_MONTH,
+} from './growth.js';
+import {
+  fetalEfwAt, FETAL_EFW_RANGE, FETAL_EFW_SOURCE, hasInfantStandard, infantPercentilesAt,
+  percentileBand, INFANT_SOURCE,
+} from './standards.js';
+import { lineChart, ticks } from './charts.js';
 import * as store from './store.js';
+import * as media from './media.js';
 
 let state = store.load();
 let currentTab = 'home';
-let selectedWeek = null; // 成長タブで表示中の週
+let selectedWeek = null; // 週ごとのガイドで表示中の週
+const ui = {
+  growthView: 'records', // records | guide
+  fetalMetric: 'efwG',
+  infantMetric: 'weight',
+  withFetal: false, // 出生後の体重グラフに妊娠中の推定体重も表示
+  albumView: 'timeline', // timeline | photos | milestones
+  timelineFilter: 'all',
+  momView: 'records', // records | tools
+  editing: null, // { type, id } 計測記録の編集中
+};
 
 const view = document.getElementById('view');
-const settingsDialog = document.getElementById('settings');
+const dialogs = {
+  settings: document.getElementById('settings'),
+  birth: document.getElementById('birth'),
+  milestone: document.getElementById('milestone'),
+  viewer: document.getElementById('viewer'),
+};
 const settingsForm = document.getElementById('settings-form');
+const birthForm = document.getElementById('birth-form');
+const milestoneForm = document.getElementById('milestone-form');
+const viewerForm = document.getElementById('viewer-form');
 
 // ---------- ユーティリティ ----------
 
@@ -25,28 +53,118 @@ function persist() {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 2400) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+  if (ms) toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+function child() {
+  return state.children.find((c) => c.id === state.activeChildId) || state.children[0];
 }
 
 function dueDate() {
-  return parseDate(state.profile.dueDate);
+  return parseDate(child().dueDate);
 }
 
 function babyLabel() {
-  return state.profile.babyName ? esc(state.profile.babyName) : '赤ちゃん';
+  return child().name ? esc(child().name) : '赤ちゃん';
+}
+
+const num = (v) => (v === '' || v == null ? null : Number(v));
+const round = (v, d = 1) => (v == null ? null : Math.round(v * 10 ** d) / 10 ** d);
+const todayStr = () => formatDate(today());
+const mine = (list) => list.filter((r) => r.childId === child().id);
+const byDateAsc = (a, b) => a.date.localeCompare(b.date);
+const byDateDesc = (a, b) => b.date.localeCompare(a.date) || (b.createdAt ?? 0) - (a.createdAt ?? 0);
+
+function periodLabel(dateStr) {
+  return periodOf(child(), dateStr).label;
+}
+
+function segmented(name, current, options) {
+  return `<div class="segmented" role="tablist">
+    ${options.map(([value, label]) => `<button role="tab" aria-selected="${value === current}"
+      class="${value === current ? 'active' : ''}" data-action="set-ui" data-key="${name}" data-value="${value}">${label}</button>`).join('')}
+  </div>`;
+}
+
+function chips(name, current, options) {
+  return `<div class="chips-row">
+    ${options.map(([value, label]) => `<button class="pill ${value === current ? 'active' : ''}" aria-pressed="${value === current}"
+      data-action="set-ui" data-key="${name}" data-value="${value}">${label}</button>`).join('')}
+  </div>`;
+}
+
+function photoStrip(ids = []) {
+  const list = ids.filter((id) => state.media.some((m) => m.id === id));
+  if (!list.length) return '';
+  return `<div class="photo-strip">${list.map((id) => photoThumb(id)).join('')}</div>`;
+}
+
+function photoThumb(id) {
+  return `<button class="photo" data-action="open-photo" data-id="${esc(id)}" aria-label="写真を開く">
+    <img data-media-id="${esc(id)}" alt="" loading="lazy"></button>`;
 }
 
 const timeFmt = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const shortDateFmt = new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+// ---------- 写真の取り込み ----------
+
+let busy = false;
+async function importPhotos(files, { takenAt = null } = {}) {
+  const list = [...(files || [])].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
+  const ids = [];
+  let failed = 0;
+  for (let i = 0; i < list.length; i++) {
+    toast(`写真を保存しています… (${i + 1}/${list.length})`, 0);
+    const id = uuid();
+    try {
+      const meta = await media.importImage(list[i], id);
+      const now = Date.now();
+      state.media.push({
+        id,
+        childId: child().id,
+        takenAt: takenAt || meta.takenAt || todayStr(),
+        caption: '',
+        width: meta.width,
+        height: meta.height,
+        createdAt: now,
+        updatedAt: now,
+      });
+      ids.push(id);
+    } catch {
+      failed += 1;
+    }
+  }
+  if (list.length) {
+    persist();
+    media.requestPersistence();
+    toast(failed
+      ? `${ids.length}枚保存、${failed}枚は読み込めませんでした（JPEG・PNG 形式でお試しください）`
+      : `写真を${ids.length}枚保存しました`, failed ? 4000 : 2400);
+  }
+  return ids;
+}
+
+async function deletePhoto(id) {
+  store.remove(state, 'media', id);
+  for (const type of ['fetalRecords', 'growthRecords', 'milestones']) {
+    state[type].forEach((r) => {
+      if (r.photoIds?.includes(id)) r.photoIds = r.photoIds.filter((p) => p !== id);
+    });
+  }
+  persist();
+  await media.deleteFile(id).catch(() => {});
+}
+
 // ---------- ホーム ----------
 
 function renderHome() {
+  if (isBorn(child())) return renderBabyHome();
   const due = dueDate();
   if (!due) {
     return `
@@ -56,6 +174,7 @@ function renderHome() {
         <p>出産予定日（または最終月経の開始日）を設定すると、妊娠週数や赤ちゃんの成長、健診スケジュールを確認できます。</p>
         <button class="btn primary" data-action="open-settings">予定日を設定する</button>
       </section>
+      ${renderQuickActions()}
       ${renderWarningCard()}`;
   }
 
@@ -64,6 +183,7 @@ function renderHome() {
   const info = weekInfo(ga.week);
   const next = nextCheckup(due, t);
   const pct = Math.round(ga.progress * 100);
+  const lastFetal = mine(state.fetalRecords).sort(byDateDesc)[0];
 
   let headline;
   if (ga.notStarted) headline = '予定日の設定を確認してください';
@@ -83,6 +203,14 @@ function renderHome() {
       ${ga.isFullTerm ? '<p class="badge">正期産の時期です</p>' : ''}
     </section>
 
+    ${ga.week >= 34 ? `
+    <section class="card born-card">
+      <p>${babyLabel()}が生まれたら、誕生を登録しましょう。月齢の表示や発育曲線に切り替わります。</p>
+      <button class="btn primary" data-action="open-birth">🎉 誕生を登録する</button>
+    </section>` : ''}
+
+    ${renderQuickActions()}
+
     <section class="card baby-size" data-action="goto-week" data-week="${info.week}">
       <div class="size-emoji">${info.emoji}</div>
       <div>
@@ -91,6 +219,13 @@ function renderHome() {
         <p class="small">身長 ${info.length} ／ 体重 ${info.weight}</p>
       </div>
     </section>
+
+    ${lastFetal ? `
+    <section class="card link-card" data-action="goto-tab" data-tab="growth">
+      <h3>📏 前回の健診の記録</h3>
+      <p>${esc(lastFetal.date)}（${esc(periodLabel(lastFetal.date))}）
+        ${lastFetal.efwG ? `推定体重 <strong>${lastFetal.efwG}g</strong>` : ''}</p>
+    </section>` : ''}
 
     <section class="card">
       <h3>💡 今週のポイント</h3>
@@ -107,6 +242,68 @@ function renderHome() {
     ${renderWarningCard()}`;
 }
 
+function renderBabyHome() {
+  const c = child();
+  const birth = parseDate(c.birthDate);
+  const t = today();
+  const age = ageOf(birth, t);
+  const latest = mine(state.growthRecords).sort(byDateDesc)[0];
+  const doneTemplates = new Set(mine(state.milestones).map((m) => m.templateId));
+  const nextTemplates = MILESTONE_TEMPLATES.filter((m) => m.phase === 'baby' && !doneTemplates.has(m.id)).slice(0, 3);
+  const events = [
+    { label: 'お食い初め（生後100日）', date: addDays(birth, 99) },
+    { label: 'ハーフバースデー', date: new Date(Date.UTC(birth.getUTCFullYear(), birth.getUTCMonth() + 6, birth.getUTCDate())) },
+    { label: '1歳の誕生日', date: new Date(Date.UTC(birth.getUTCFullYear() + 1, birth.getUTCMonth(), birth.getUTCDate())) },
+  ].filter((e) => diffDays(e.date, t) >= 0);
+
+  return `
+    <section class="card hero">
+      <p class="hero-sub">${babyLabel()}</p>
+      <p class="hero-age">${age ? esc(formatAge(age)) : '誕生日を確認してください'}</p>
+      ${age ? `<p class="hero-count">生まれて <strong>${age.totalDays + 1}</strong> 日目</p>` : ''}
+      <p class="muted small">誕生日: ${formatDateJa(birth)}</p>
+    </section>
+
+    ${renderQuickActions()}
+
+    ${latest ? `
+    <section class="card link-card" data-action="goto-tab" data-tab="growth">
+      <h3>📏 最新の計測</h3>
+      <p>${esc(latest.date)}（${esc(periodLabel(latest.date))}）</p>
+      <p>${growthValues(latest)}</p>
+    </section>` : ''}
+
+    ${events.length ? `
+    <section class="card">
+      <h3>📅 これからの行事</h3>
+      <ul class="plain">
+        ${events.map((e) => `<li>${esc(e.label)}: <strong>${formatDateJa(e.date)}</strong>
+          <span class="muted small">${diffDays(e.date, t) === 0 ? '今日！' : `あと${diffDays(e.date, t)}日`}</span></li>`).join('')}
+      </ul>
+    </section>` : ''}
+
+    ${nextTemplates.length ? `
+    <section class="card">
+      <h3>🌱 これからの「初めて」</h3>
+      <ul class="plain">
+        ${nextTemplates.map((m) => `<li>${m.emoji} ${esc(m.title)} <span class="muted small">${esc(m.hint)}</span>
+          <button class="btn ghost tiny" data-action="new-milestone" data-template="${m.id}">記録</button></li>`).join('')}
+      </ul>
+      <p class="muted small">時期は一般的な目安です。発達には個人差があります。</p>
+    </section>` : ''}`;
+}
+
+function renderQuickActions() {
+  return `
+    <section class="quick">
+      <label class="quick-btn">📷<span>写真を追加</span>
+        <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
+      </label>
+      <button class="quick-btn" data-action="goto-tab" data-tab="growth"><span class="q-emoji">📏</span><span>${isBorn(child()) ? '身長・体重' : '健診の記録'}</span></button>
+      <button class="quick-btn" data-action="new-milestone"><span class="q-emoji">🌟</span><span>できごと</span></button>
+    </section>`;
+}
+
 function renderWarningCard() {
   return `
     <section class="card warning">
@@ -116,23 +313,318 @@ function renderWarningCard() {
     </section>`;
 }
 
-// ---------- 成長（週ごとのガイド） ----------
+// ---------- 成長 ----------
 
+function renderGrowth() {
+  const head = segmented('growthView', ui.growthView, [['records', '📏 成長の記録'], ['guide', '📖 週ごとのガイド']]);
+  if (ui.growthView === 'guide') return head + renderWeeks();
+  // 出生後でも、妊娠中の記録を編集するときは健診の記録フォームを表示する
+  const fetalForm = !isBorn(child()) || ui.editing?.type === 'fetalRecords';
+  return head + (fetalForm ? renderFetal() : renderInfant());
+}
+
+function field(name, label, value, attrs = '') {
+  return `<label>${label}<input type="number" name="${name}" value="${value ?? ''}" inputmode="decimal" ${attrs}></label>`;
+}
+
+const FETAL_METRICS = [
+  ['efwG', '推定体重', 'g'],
+  ['bpdMm', '頭の横幅 BPD', 'mm'],
+  ['flMm', '太ももの骨 FL', 'mm'],
+  ['acMm', 'おなかの周り AC', 'mm'],
+  ['crlMm', '頭からおしりまで CRL', 'mm'],
+  ['fhrBpm', '心拍数', '回/分'],
+];
+
+function fetalValues(r) {
+  return FETAL_METRICS.filter(([k]) => r[k] != null)
+    .map(([k, label, unit]) => `<span class="val">${label.split(' ')[0]} <strong>${r[k]}</strong>${unit}</span>`).join('');
+}
+
+function editingRecord(type) {
+  if (ui.editing?.type !== type) return null;
+  return state[type].find((r) => r.id === ui.editing.id) || null;
+}
+
+function renderFetal() {
+  const due = dueDate();
+  const rec = editingRecord('fetalRecords') || {};
+  const records = mine(state.fetalRecords).sort(byDateDesc);
+  return `
+    <section class="card">
+      <h2>${rec.id ? '✏️ 健診の記録を編集' : '📏 健診の記録'}</h2>
+      <p class="muted small">エコーで測った値を、わかる項目だけ入力してください。</p>
+      <form data-form="fetal" class="record-form">
+        <input type="hidden" name="id" value="${esc(rec.id || '')}">
+        <label>健診日<input type="date" name="date" value="${esc(rec.date || todayStr())}" required></label>
+        <div class="grid2">
+          ${field('efwG', '推定体重 EFW (g)', rec.efwG, 'min="1" max="6000" step="1"')}
+          ${field('bpdMm', '頭の横幅 BPD (mm)', rec.bpdMm, 'min="1" max="120" step="0.1"')}
+          ${field('flMm', '太ももの骨 FL (mm)', rec.flMm, 'min="1" max="100" step="0.1"')}
+          ${field('acMm', 'おなかの周り AC (mm)', rec.acMm, 'min="1" max="450" step="0.1"')}
+          ${field('crlMm', '頭殿長 CRL (mm)', rec.crlMm, 'min="1" max="120" step="0.1"')}
+          ${field('fhrBpm', '心拍数 (回/分)', rec.fhrBpm, 'min="30" max="250" step="1"')}
+        </div>
+        <label>メモ（任意）<textarea name="note" rows="2" maxlength="1000" placeholder="先生に言われたことなど">${esc(rec.note || '')}</textarea></label>
+        <label>エコー写真（任意）<input type="file" name="photos" accept="image/*" multiple></label>
+        ${rec.id ? photoStrip(rec.photoIds) : ''}
+        <div class="actions">
+          ${rec.id ? '<button type="button" class="btn ghost" data-action="cancel-edit">やめる</button>' : ''}
+          <button class="btn primary">${rec.id ? '更新' : '記録する'}</button>
+        </div>
+      </form>
+      ${due ? '' : '<p class="alert small">出産予定日を設定すると、記録した日の妊娠週数とグラフが表示されます。</p>'}
+    </section>
+
+    ${due ? renderFetalChart(due, records) : ''}
+
+    ${records.length ? `
+    <section class="card">
+      <h2>記録の一覧</h2>
+      <ul class="records">${records.map((r) => recordItem('fetalRecords', r, fetalValues(r))).join('')}</ul>
+    </section>` : ''}`;
+}
+
+function recordItem(type, r, valuesHtml) {
+  return `<li>
+    <div class="record-head">
+      <span>${esc(r.date)} <span class="muted">${esc(periodLabel(r.date))}</span></span>
+      <span>
+        <button class="icon-btn small" data-action="edit-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="編集">✏️</button>
+        <button class="icon-btn small" data-action="delete-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="削除">✕</button>
+      </span>
+    </div>
+    <div class="vals">${valuesHtml}</div>
+    ${r.note ? `<p class="note">${esc(r.note).replace(/\n/g, '<br>')}</p>` : ''}
+    ${photoStrip(r.photoIds)}
+  </li>`;
+}
+
+function renderFetalChart(due, records) {
+  const metric = FETAL_METRICS.find(([k]) => k === ui.fetalMetric) || FETAL_METRICS[0];
+  const [key, label, unit] = metric;
+  const pts = records.filter((r) => r[key] != null)
+    .map((r) => [gestationalAge(due, parseDate(r.date)).totalDays / 7, r[key], `${r.date}（${periodLabel(r.date)}）${r[key]}${unit}`])
+    .sort((a, b) => a[0] - b[0]);
+  const available = FETAL_METRICS.filter(([k]) => records.some((r) => r[k] != null));
+  const metricChips = available.length > 1
+    ? chips('fetalMetric', key, available.map(([k, l]) => [k, l.split(' ')[0]])) : '';
+  if (!pts.length) {
+    return available.length ? `<section class="card"><h2>📈 グラフ</h2>${metricChips}</section>` : '';
+  }
+
+  const isEfw = key === 'efwG';
+  const xs = pts.map((p) => p[0]);
+  let x0 = Math.floor(Math.min(...xs)) - 1;
+  let x1 = Math.ceil(Math.max(...xs)) + 1;
+  if (isEfw) {
+    x0 = Math.max(4, Math.min(x0, FETAL_EFW_RANGE[0]));
+    x1 = Math.max(x1, Math.min(FETAL_EFW_RANGE[1], x0 + 8));
+  }
+  const band = { lower: [], upper: [], cls: 'band' };
+  const mean = { pts: [], cls: 'ref' };
+  if (isEfw) {
+    for (let w = Math.max(x0, FETAL_EFW_RANGE[0]); w <= Math.min(x1, FETAL_EFW_RANGE[1]); w += 0.5) {
+      const ref = fetalEfwAt(w);
+      band.lower.push([w, ref.low]);
+      band.upper.push([w, ref.high]);
+      mean.pts.push([w, ref.mean]);
+    }
+  }
+  const ys = [...pts.map((p) => p[1]), ...band.upper.map((p) => p[1])];
+  const yMax = Math.max(...ys) * 1.08;
+  const yMin = isEfw ? 0 : Math.max(0, Math.min(...pts.map((p) => p[1])) * 0.85);
+  const step = (x1 - x0) > 16 ? 4 : 2;
+
+  return `
+    <section class="card">
+      <h2>📈 ${esc(label.split(' ')[0])}の変化</h2>
+      ${metricChips}
+      ${lineChart({
+        label: `${label}の推移`,
+        xRange: [x0, x1],
+        yRange: [yMin, yMax],
+        xTicks: ticks(x0, x1).filter((v) => v % step === 0),
+        xTick: (v) => `${v}週`,
+        yTick: (v) => v.toLocaleString('ja-JP'),
+        bands: [band],
+        refLines: [mean],
+        series: [{ pts }],
+      })}
+      <p class="legend small">
+        <span class="lg lg-line"></span>記録
+        ${isEfw ? `<span class="lg lg-band"></span>平均±1.5SD の範囲 <span class="lg lg-ref"></span>平均` : ''}
+      </p>
+      <p class="muted small">${isEfw ? `標準値: ${esc(FETAL_EFW_SOURCE)}。` : ''}グラフは一般的な目安です。気になることは健診で医師に相談してください。</p>
+    </section>`;
+}
+
+const INFANT_METRICS = [
+  ['weight', '体重', 'kg'],
+  ['length', '身長', 'cm'],
+  ['head', '頭囲', 'cm'],
+];
+
+function growthValues(r) {
+  return [
+    ['heightCm', '身長', 'cm'], ['weightKg', '体重', 'kg'], ['headCm', '頭囲', 'cm'], ['chestCm', '胸囲', 'cm'],
+  ].filter(([k]) => r[k] != null).map(([k, l, u]) => `<span class="val">${l} <strong>${r[k]}</strong>${u}</span>`).join('');
+}
+
+function birthValues(c) {
+  const b = c.birth || {};
+  return [
+    [b.weightG, '体重', 'g'], [b.lengthCm, '身長', 'cm'], [b.headCm, '頭囲', 'cm'], [b.chestCm, '胸囲', 'cm'],
+  ].filter(([v]) => v != null).map(([v, l, u]) => `<span class="val">${l} <strong>${v}</strong>${u}</span>`).join('');
+}
+
+function renderInfant() {
+  const c = child();
+  const rec = editingRecord('growthRecords') || {};
+  const records = mine(state.growthRecords).sort(byDateDesc);
+  const gest = gestAtBirth(c);
+  const fetal = mine(state.fetalRecords).sort(byDateDesc);
+  return `
+    <section class="card">
+      <div class="record-head">
+        <h2>🎉 生まれたとき</h2>
+        <button class="btn ghost tiny" data-action="open-birth">編集</button>
+      </div>
+      <p>${formatDateJa(parseDate(c.birthDate))}${gest ? `（在胎${gest.week}週${gest.day}日）` : ''}
+        ${c.sex ? `・${c.sex === 'male' ? '男の子' : '女の子'}` : ''}</p>
+      <div class="vals">${birthValues(c) || '<span class="muted small">生まれたときの大きさは未入力です</span>'}</div>
+    </section>
+
+    <section class="card">
+      <h2>${rec.id ? '✏️ 計測を編集' : '📏 身長・体重の記録'}</h2>
+      <form data-form="growth" class="record-form">
+        <input type="hidden" name="id" value="${esc(rec.id || '')}">
+        <label>測った日<input type="date" name="date" value="${esc(rec.date || todayStr())}" required></label>
+        <div class="grid2">
+          ${field('weightKg', '体重 (kg)', rec.weightKg, 'min="0.3" max="40" step="0.001" placeholder="例: 5.42"')}
+          ${field('heightCm', '身長 (cm)', rec.heightCm, 'min="20" max="130" step="0.1"')}
+          ${field('headCm', '頭囲 (cm)', rec.headCm, 'min="15" max="60" step="0.1"')}
+          ${field('chestCm', '胸囲 (cm)', rec.chestCm, 'min="15" max="80" step="0.1"')}
+        </div>
+        <label>メモ（任意）<textarea name="note" rows="2" maxlength="1000" placeholder="1ヶ月健診など">${esc(rec.note || '')}</textarea></label>
+        <label>写真（任意）<input type="file" name="photos" accept="image/*" multiple></label>
+        ${rec.id ? photoStrip(rec.photoIds) : ''}
+        <div class="actions">
+          ${rec.id ? '<button type="button" class="btn ghost" data-action="cancel-edit">やめる</button>' : ''}
+          <button class="btn primary">${rec.id ? '更新' : '記録する'}</button>
+        </div>
+      </form>
+    </section>
+
+    ${renderInfantChart(c, records, fetal)}
+
+    ${records.length ? `
+    <section class="card">
+      <h2>記録の一覧</h2>
+      <ul class="records">${records.map((r) => recordItem('growthRecords', r, growthValues(r))).join('')}</ul>
+    </section>` : ''}
+
+    ${fetal.length ? `
+    <section class="card">
+      <details>
+        <summary><h2>🤰 妊娠中の記録 <span class="count">${fetal.length}件</span></h2></summary>
+        <ul class="records">${fetal.map((r) => recordItem('fetalRecords', r, fetalValues(r))).join('')}</ul>
+      </details>
+    </section>` : ''}`;
+}
+
+function renderInfantChart(c, records, fetal) {
+  const birth = parseDate(c.birthDate);
+  const [key, label, unit] = INFANT_METRICS.find(([k]) => k === ui.infantMetric) || INFANT_METRICS[0];
+  const field2 = { weight: 'weightKg', length: 'heightCm', head: 'headCm' }[key];
+  const birthVal = { weight: c.birth?.weightG != null ? c.birth.weightG / 1000 : null, length: c.birth?.lengthCm, head: c.birth?.headCm }[key];
+  const pts = records.filter((r) => r[field2] != null)
+    .map((r) => [diffDays(parseDate(r.date), birth) / DAYS_PER_MONTH, r[field2], `${r.date}（${periodLabel(r.date)}）${r[field2]}${unit}`]);
+  if (birthVal != null) pts.push([0, birthVal, `生まれたとき ${birthVal}${unit}`]);
+  pts.sort((a, b) => a[0] - b[0]);
+  const fetalPts = key === 'weight' && ui.withFetal
+    ? fetal.filter((r) => r.efwG != null).map((r) => [diffDays(parseDate(r.date), birth) / DAYS_PER_MONTH, r.efwG / 1000,
+      `${r.date}（${periodLabel(r.date)}）推定 ${r.efwG}g`]).sort((a, b) => a[0] - b[0])
+    : [];
+
+  const metricChips = chips('infantMetric', key, INFANT_METRICS.map(([k, l]) => [k, l]));
+  const fetalToggle = key === 'weight' && fetal.some((r) => r.efwG != null)
+    ? `<label class="toggle"><input type="checkbox" data-action="toggle-fetal" ${ui.withFetal ? 'checked' : ''}> 妊娠中の推定体重も表示</label>` : '';
+  if (!pts.length && !fetalPts.length) {
+    return `<section class="card"><h2>📈 発育曲線</h2>${metricChips}<p class="muted">記録するとグラフが表示されます。</p></section>`;
+  }
+
+  const allX = [...pts, ...fetalPts].map((p) => p[0]);
+  const x0 = Math.min(0, Math.floor(Math.min(...allX)));
+  const x1 = Math.max(6, Math.ceil(Math.max(...allX) + 1));
+  const sex = c.sex;
+  const hasStd = sex && hasInfantStandard(key, sex);
+  const band = { lower: [], upper: [], cls: 'band' };
+  const median = { pts: [], cls: 'ref' };
+  if (hasStd) {
+    for (let m = Math.max(0, x0); m <= x1; m += 0.25) {
+      const ps = infantPercentilesAt(key, sex, m);
+      if (!ps) continue;
+      band.lower.push([m, ps[0]]);
+      band.upper.push([m, ps[6]]);
+      median.pts.push([m, ps[3]]);
+    }
+  }
+  const ys = [...pts, ...fetalPts].map((p) => p[1]).concat(band.upper.map((p) => p[1]), band.lower.map((p) => p[1]));
+  const yMax = Math.max(...ys) * 1.06;
+  const yMin = key === 'weight' ? 0 : Math.max(0, Math.min(...ys) * 0.9);
+  const span = x1 - x0;
+  const step = span > 24 ? 6 : span > 12 ? 3 : span > 6 ? 2 : 1;
+  const latest = pts[pts.length - 1];
+  const bandText = hasStd && latest ? percentileBand(key, sex, latest[0], latest[1]) : null;
+
+  return `
+    <section class="card">
+      <h2>📈 発育曲線</h2>
+      ${metricChips}
+      ${fetalToggle}
+      ${lineChart({
+        label: `${label}の推移`,
+        xRange: [x0, x1],
+        yRange: [yMin, yMax],
+        xTicks: ticks(x0, x1).filter((v) => v % step === 0),
+        xTick: (v) => (v === 0 ? '誕生' : v < 0 ? `${v}ヶ月` : v % 12 === 0 ? `${v / 12}歳` : `${v}ヶ月`),
+        bands: [band],
+        refLines: [median],
+        series: [
+          ...(fetalPts.length ? [{ pts: fetalPts, cls: 'line fetal', dotCls: 'dot fetal' }] : []),
+          { pts },
+        ],
+      })}
+      <p class="legend small">
+        <span class="lg lg-line"></span>記録
+        ${fetalPts.length ? '<span class="lg lg-fetal"></span>妊娠中（推定体重）' : ''}
+        ${hasStd ? '<span class="lg lg-band"></span>3〜97パーセンタイル <span class="lg lg-ref"></span>中央値' : ''}
+      </p>
+      ${bandText ? `<p class="small">最新の記録は ${esc(bandText)} パーセンタイルの間です。</p>` : ''}
+      ${!sex ? '<p class="muted small">性別を登録すると、男女別の発育曲線（標準の範囲）を重ねて表示できます。</p>'
+        : !hasStd ? `<p class="muted small">発育曲線の標準値（${esc(INFANT_SOURCE)}）は準備中です。いまは記録した値だけを表示しています。</p>`
+          : `<p class="muted small">標準値: ${esc(INFANT_SOURCE)}。</p>`}
+      <p class="muted small">発育曲線は一般的な目安です。気になることは健診で医師・保健師に相談してください。</p>
+    </section>`;
+}
+
+// 週ごとのガイド（既存）
 function renderWeeks() {
   const due = dueDate();
   const current = due ? gestationalAge(due, today()).week : null;
   const w = selectedWeek ?? (current != null ? Math.max(4, Math.min(41, current)) : 4);
   const info = weekInfo(w);
-  const chips = [];
+  const weekChips = [];
   for (let i = 4; i <= 41; i++) {
-    chips.push(`<button class="chip ${i === w ? 'active' : ''} ${i === current ? 'current' : ''}" data-action="select-week" data-week="${i}">${i}</button>`);
+    weekChips.push(`<button class="chip ${i === w ? 'active' : ''} ${i === current ? 'current' : ''}" data-action="select-week" data-week="${i}">${i}</button>`);
   }
   const range = due ? `${formatDateJa(addDays(due, (w - 40) * 7))} 〜` : '';
 
   return `
     <section class="card">
       <h2>週ごとの成長ガイド</h2>
-      <div class="chips" id="week-chips">${chips.join('')}</div>
+      <div class="chips" id="week-chips">${weekChips.join('')}</div>
     </section>
     <section class="card week-detail">
       <div class="week-head">
@@ -166,7 +658,138 @@ function renderWeeks() {
     </section>`;
 }
 
-// ---------- ツール（陣痛タイマー・胎動カウンター） ----------
+// ---------- アルバム ----------
+
+function renderAlbum() {
+  const head = segmented('albumView', ui.albumView, [['timeline', 'タイムライン'], ['photos', '写真'], ['milestones', 'できごと']]);
+  const add = `
+    <div class="album-actions">
+      <label class="btn primary file-btn">📷 写真を追加
+        <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
+      </label>
+      <button class="btn ghost" data-action="new-milestone">🌟 できごと</button>
+    </div>`;
+  const body = { timeline: renderTimeline, photos: renderPhotos, milestones: renderMilestones }[ui.albumView]();
+  return head + add + body;
+}
+
+const TIMELINE_FILTERS = {
+  all: () => true,
+  measure: (i) => i.kind === 'fetal' || i.kind === 'growth' || i.kind === 'birth',
+  photo: (i) => i.kind === 'photos' || (i.record?.photoIds?.length ?? 0) > 0,
+  milestone: (i) => i.kind === 'milestone' || i.kind === 'birth',
+  journal: (i) => i.kind === 'journal',
+};
+
+function renderTimeline() {
+  const items = buildTimeline(state, child().id).filter(TIMELINE_FILTERS[ui.timelineFilter] || TIMELINE_FILTERS.all);
+  const groups = groupByPeriod(child(), items);
+  const filterChips = chips('timelineFilter', ui.timelineFilter,
+    [['all', 'すべて'], ['measure', '計測'], ['photo', '写真'], ['milestone', 'できごと'], ['journal', '日記']]);
+  if (!groups.length) {
+    return `<section class="card">${filterChips}
+      <p class="muted">まだ記録がありません。健診の記録や写真、できごとを追加すると、ここに時系列で表示されます。</p></section>`;
+  }
+  return `
+    <section class="card">${filterChips}</section>
+    ${groups.map((g) => `
+      <section class="tl-group">
+        <h3 class="tl-head">${esc(g.label)}</h3>
+        <ul class="timeline">${g.items.map(timelineItem).join('')}</ul>
+      </section>`).join('')}`;
+}
+
+function timelineItem(item) {
+  const date = `<span class="tl-date">${esc(item.date)}</span>`;
+  switch (item.kind) {
+    case 'fetal':
+      return `<li class="tl tl-measure">${date}<p class="tl-title">📏 健診の記録</p>
+        <div class="vals">${fetalValues(item.record)}</div>
+        ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}</li>`;
+    case 'growth':
+      return `<li class="tl tl-measure">${date}<p class="tl-title">📏 計測</p>
+        <div class="vals">${growthValues(item.record)}</div>
+        ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}</li>`;
+    case 'birth':
+      return `<li class="tl tl-birth">${date}<p class="tl-title">🎉 ${babyLabel()}誕生！</p>
+        <div class="vals">${birthValues(item.record)}</div></li>`;
+    case 'milestone': {
+      const t = milestoneTemplate(item.record.templateId);
+      return `<li class="tl tl-milestone">${date}
+        <p class="tl-title">${t ? t.emoji : '🌟'} ${esc(item.record.title)}
+          <button class="icon-btn small" data-action="edit-milestone" data-id="${esc(item.record.id)}" aria-label="編集">✏️</button></p>
+        ${item.record.note ? `<p class="note">${esc(item.record.note).replace(/\n/g, '<br>')}</p>` : ''}${photoStrip(item.record.photoIds)}</li>`;
+    }
+    case 'photos':
+      return `<li class="tl tl-photo">${date}<p class="tl-title">📷 写真 ${item.media.length}枚</p>
+        <div class="photo-strip">${item.media.map((m) => photoThumb(m.id)).join('')}</div></li>`;
+    case 'journal':
+      return `<li class="tl tl-journal">${date}<p class="tl-title">${esc(item.record.mood)} 日記</p>
+        <p class="note">${esc(item.record.text).replace(/\n/g, '<br>')}</p></li>`;
+    default:
+      return '';
+  }
+}
+
+function albumPhotos() {
+  return mine(state.media).sort((a, b) => b.takenAt.localeCompare(a.takenAt) || b.createdAt - a.createdAt);
+}
+
+function renderPhotos() {
+  const photos = albumPhotos();
+  if (!photos.length) {
+    return '<section class="card"><p class="muted">写真はまだありません。エコー写真やおなかの写真、生まれてからの写真を追加しましょう。</p></section>';
+  }
+  const groups = groupByPeriod(child(), photos.map((m) => ({ date: m.takenAt, media: m })));
+  return groups.map((g) => `
+    <section class="tl-group">
+      <h3 class="tl-head">${esc(g.label)} <span class="muted small">${g.items.length}枚</span></h3>
+      <div class="photo-grid">${g.items.map((i) => photoThumb(i.media.id)).join('')}</div>
+    </section>`).join('');
+}
+
+function renderMilestones() {
+  const records = mine(state.milestones);
+  const byTemplate = new Map(records.filter((r) => r.templateId).map((r) => [r.templateId, r]));
+  const custom = records.filter((r) => !r.templateId).sort(byDateDesc);
+  const section = (phase, title) => `
+    <section class="card">
+      <h2>${title}</h2>
+      <ul class="milestones">
+        ${MILESTONE_TEMPLATES.filter((t) => t.phase === phase).map((t) => {
+          const r = byTemplate.get(t.id);
+          return `<li class="${r ? 'done' : ''}">
+            <span class="ms-emoji">${t.emoji}</span>
+            <span class="ms-body"><strong>${esc(t.title)}</strong>
+              <small class="muted">${r ? `${esc(r.date)}（${esc(periodLabel(r.date))}）` : esc(t.hint)}</small></span>
+            ${r ? `<button class="btn ghost tiny" data-action="edit-milestone" data-id="${esc(r.id)}">見る</button>`
+              : `<button class="btn ghost tiny" data-action="new-milestone" data-template="${t.id}">記録</button>`}
+          </li>`;
+        }).join('')}
+      </ul>
+    </section>`;
+  const born = isBorn(child());
+  return `
+    ${born ? section('baby', '👶 生まれてから') : section('pregnancy', '🤰 妊娠中')}
+    ${custom.length ? `
+    <section class="card">
+      <h2>✍️ そのほかの「初めて」</h2>
+      <ul class="milestones">${custom.map((r) => `<li class="done">
+        <span class="ms-emoji">🌟</span>
+        <span class="ms-body"><strong>${esc(r.title)}</strong><small class="muted">${esc(r.date)}（${esc(periodLabel(r.date))}）</small></span>
+        <button class="btn ghost tiny" data-action="edit-milestone" data-id="${esc(r.id)}">見る</button></li>`).join('')}
+      </ul>
+    </section>` : ''}
+    ${born ? section('pregnancy', '🤰 妊娠中') : section('baby', '👶 生まれてから（これから）')}
+    <p class="muted small center">時期は一般的な目安です。発達には個人差があります。</p>`;
+}
+
+// ---------- ママ（体重・日記・陣痛・胎動） ----------
+
+function renderMom() {
+  const head = segmented('momView', ui.momView, [['records', '⚖️ 体重・日記'], ['tools', '⏱️ 陣痛・胎動']]);
+  return head + (ui.momView === 'tools' ? renderTools() : renderRecords());
+}
 
 function activeContraction() {
   const last = state.contractions[state.contractions.length - 1];
@@ -242,39 +865,27 @@ function renderTools() {
     </section>`;
 }
 
-// ---------- 記録（体重・日記） ----------
-
 function renderWeightChart(due) {
-  const pts = [...state.weights].sort((a, b) => a.date.localeCompare(b.date));
+  const pts = [...state.weights].sort(byDateAsc);
   if (pts.length < 2) return '';
-  const W = 320;
-  const H = 160;
-  const pad = { l: 34, r: 10, t: 10, b: 22 };
   const xs = pts.map((p) => {
     const d = parseDate(p.date);
     return due ? gestationalAge(due, d).totalDays / 7 : diffDays(d, parseDate(pts[0].date)) / 7;
   });
   const ys = pts.map((p) => p.kg);
   const pre = state.profile.preWeightKg;
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs, minX + 1);
+  const minX = Math.floor(Math.min(...xs));
+  const maxX = Math.max(Math.ceil(Math.max(...xs)), minX + 1);
   const minY = Math.floor(Math.min(...ys, pre ?? Infinity) - 1);
   const maxY = Math.ceil(Math.max(...ys) + 1);
-  const sx = (x) => pad.l + ((x - minX) / (maxX - minX)) * (W - pad.l - pad.r);
-  const sy = (y) => H - pad.b - ((y - minY) / (maxY - minY)) * (H - pad.t - pad.b);
-  const line = xs.map((x, i) => `${i ? 'L' : 'M'}${sx(x).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join(' ');
-
-  return `
-    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="体重の推移">
-      <line x1="${pad.l}" y1="${H - pad.b}" x2="${W - pad.r}" y2="${H - pad.b}" class="axis"/>
-      <text x="4" y="${sy(maxY) + 4}" class="tick">${maxY}</text>
-      <text x="4" y="${sy(minY)}" class="tick">${minY}</text>
-      <text x="${pad.l}" y="${H - 6}" class="tick">${due ? `${Math.floor(minX)}週` : ''}</text>
-      <text x="${W - pad.r}" y="${H - 6}" class="tick" text-anchor="end">${due ? `${Math.floor(maxX)}週` : ''}</text>
-      ${pre ? `<line x1="${pad.l}" x2="${W - pad.r}" y1="${sy(pre)}" y2="${sy(pre)}" class="baseline"/>` : ''}
-      <path d="${line}" class="line"/>
-      ${xs.map((x, i) => `<circle cx="${sx(x).toFixed(1)}" cy="${sy(ys[i]).toFixed(1)}" r="3" class="dot"/>`).join('')}
-    </svg>`;
+  return lineChart({
+    label: '体重の推移',
+    xRange: [minX, maxX],
+    yRange: [minY, maxY],
+    xTick: (v) => (due ? `${v}週` : `${v}`),
+    refLines: pre ? [{ pts: [[minX, pre], [maxX, pre]], cls: 'baseline' }] : [],
+    series: [{ pts: xs.map((x, i) => [x, ys[i], `${pts[i].date} ${ys[i]}kg`]) }],
+  });
 }
 
 const MOODS = ['😊', '😌', '😐', '😣', '😢'];
@@ -283,17 +894,16 @@ function renderRecords() {
   const due = dueDate();
   const { heightCm, preWeightKg } = state.profile;
   const guide = weightGainGuide(heightCm, preWeightKg);
-  const weights = [...state.weights].sort((a, b) => b.date.localeCompare(a.date));
+  const weights = [...state.weights].sort(byDateDesc);
   const latest = weights[0];
   const gain = latest && preWeightKg ? Math.round((latest.kg - preWeightKg) * 10) / 10 : null;
-  const todayStr = formatDate(today());
   const journal = [...state.journal].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
 
   return `
     <section class="card">
       <h2>⚖️ 体重記録</h2>
       <form class="inline-form" data-form="weight">
-        <input type="date" name="date" value="${todayStr}" required>
+        <input type="date" name="date" value="${todayStr()}" required>
         <input type="number" name="kg" step="0.1" min="25" max="200" inputmode="decimal" placeholder="kg" required>
         <button class="btn primary">記録</button>
       </form>
@@ -314,7 +924,7 @@ function renderRecords() {
     </section>
 
     <section class="card">
-      <h2>📔 マタニティ日記</h2>
+      <h2>📔 日記</h2>
       <form data-form="journal" class="journal-form">
         <div class="moods">
           ${MOODS.map((m, i) => `<label><input type="radio" name="mood" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}
@@ -326,8 +936,8 @@ function renderRecords() {
       <ul class="journal">
         ${journal.map((j) => `<li>
           <div class="journal-head">
-            <span>${esc(j.mood)} ${esc(j.date)}${due ? `・${Math.max(0, gestationalAge(due, parseDate(j.date)).week)}週` : ''}</span>
-            <button class="icon-btn small" data-action="delete-journal" data-id="${j.id}" aria-label="削除">✕</button>
+            <span>${esc(j.mood)} ${esc(j.date)}・${esc(periodLabel(j.date))}</span>
+            <button class="icon-btn small" data-action="delete-journal" data-id="${esc(j.id)}" aria-label="削除">✕</button>
           </div>
           <p>${esc(j.text).replace(/\n/g, '<br>')}</p>
         </li>`).join('')}
@@ -359,7 +969,7 @@ function renderLists() {
 
   return `
     <section class="card">
-      <details open>
+      <details ${isBorn(child()) ? '' : 'open'}>
         <summary><h2>🏥 妊婦健診スケジュール（目安）</h2></summary>
         ${due ? `
         <p class="muted small">〜23週: 4週に1回 / 24〜35週: 2週に1回 / 36週〜: 毎週。実際の日程は産院の指示に従ってください。</p>
@@ -387,7 +997,7 @@ function renderLists() {
     </section>
 
     <section class="card">
-      <details>
+      <details ${isBorn(child()) ? 'open' : ''}>
         <summary><h2>📋 手続きリスト <span class="count">${progressText(procKeys)}</span></h2></summary>
         <p class="muted small">制度の内容・期限は自治体や勤務先によって異なります。最新情報は各窓口で確認してください。</p>
         ${PROCEDURES.map((g) => `
@@ -403,7 +1013,9 @@ function renderLists() {
 
 // ---------- 描画・ナビゲーション ----------
 
-const RENDERERS = { home: renderHome, weeks: renderWeeks, tools: renderTools, records: renderRecords, lists: renderLists };
+const RENDERERS = { home: renderHome, growth: renderGrowth, album: renderAlbum, mom: renderMom, lists: renderLists };
+// 以前のタブ名（ブックマーク等）からの移行
+const LEGACY_TABS = { weeks: ['growth', { growthView: 'guide' }], tools: ['mom', { momView: 'tools' }], records: ['mom', { momView: 'records' }] };
 
 function render({ keepScroll = true } = {}) {
   const y = window.scrollY;
@@ -417,14 +1029,20 @@ function render({ keepScroll = true } = {}) {
   if (keepScroll) window.scrollTo(0, y);
   else window.scrollTo(0, 0);
   updateLive();
-  if (currentTab === 'weeks') {
+  media.hydrateImages(view);
+  if (currentTab === 'growth' && ui.growthView === 'guide') {
     document.querySelector('#week-chips .chip.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
   }
 }
 
 function switchTab(tab) {
+  if (LEGACY_TABS[tab]) {
+    Object.assign(ui, LEGACY_TABS[tab][1]);
+    [tab] = LEGACY_TABS[tab];
+  }
   if (!RENDERERS[tab]) return;
   currentTab = tab;
+  ui.editing = null;
   if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`);
   render({ keepScroll: false });
 }
@@ -439,14 +1057,17 @@ setInterval(updateLive, 1000);
 
 // ---------- 設定 ----------
 
-function openSettings() {
-  const p = state.profile;
-  settingsForm.dueDate.value = p.dueDate || '';
+async function openSettings() {
+  const c = child();
+  settingsForm.dueDate.value = c.dueDate || '';
   settingsForm.lmp.value = '';
-  settingsForm.babyName.value = p.babyName || '';
-  settingsForm.heightCm.value = p.heightCm ?? '';
-  settingsForm.preWeightKg.value = p.preWeightKg ?? '';
-  settingsDialog.showModal();
+  settingsForm.babyName.value = c.name || '';
+  settingsForm.heightCm.value = state.profile.heightCm ?? '';
+  settingsForm.preWeightKg.value = state.profile.preWeightKg ?? '';
+  dialogs.settings.showModal();
+  const est = await media.storageEstimate();
+  document.getElementById('storage-usage').textContent = est?.usage != null
+    ? `（使用量: 約${Math.round(est.usage / 1024 / 1024)}MB・写真${mine(state.media).length}枚）` : '';
 }
 
 settingsForm.lmp.addEventListener('change', () => {
@@ -461,7 +1082,7 @@ settingsForm.addEventListener('submit', (e) => {
     toast('日付の形式が正しくありません');
     return;
   }
-  if (due) {
+  if (due && !isBorn(child())) {
     const d = diffDays(parseDate(due), today());
     if (d > 300 || d < -60) {
       e.preventDefault();
@@ -469,10 +1090,8 @@ settingsForm.addEventListener('submit', (e) => {
       return;
     }
   }
-  const num = (v) => (v === '' ? null : Number(v));
+  Object.assign(child(), { dueDate: due, name: settingsForm.babyName.value.trim(), updatedAt: Date.now() });
   state.profile = {
-    dueDate: due,
-    babyName: settingsForm.babyName.value.trim(),
     heightCm: num(settingsForm.heightCm.value),
     preWeightKg: num(settingsForm.preWeightKg.value),
   };
@@ -486,7 +1105,7 @@ function exportData() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `maternity-backup-${formatDate(today())}.json`;
+  a.download = `maternity-backup-${todayStr()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
@@ -494,15 +1113,226 @@ function exportData() {
 async function importData(file) {
   try {
     const data = JSON.parse(await file.text());
-    if (!data || typeof data !== 'object' || !data.profile) throw new Error('invalid');
+    if (!data || typeof data !== 'object' || !(data.profile || data.children)) throw new Error('invalid');
     if (!confirm('現在のデータをバックアップの内容で置き換えます。よろしいですか？')) return;
     state = store.mergeState(data);
     persist();
-    settingsDialog.close();
+    dialogs.settings.close();
     render();
     toast('復元しました');
   } catch {
     toast('バックアップファイルを読み込めませんでした');
+  }
+}
+
+// ---------- 誕生の登録 ----------
+
+function updateBirthGest() {
+  const due = dueDate();
+  const b = parseDate(birthForm.birthDate.value);
+  const el = document.getElementById('birth-gest');
+  if (due && b) {
+    const ga = gestationalAge(due, b);
+    el.textContent = `在胎 ${ga.week}週${ga.day}日（出産予定日 ${formatDateJa(due)}）`;
+  } else {
+    el.textContent = due ? '' : '出産予定日を設定しておくと、在胎週数も記録されます。';
+  }
+}
+
+function openBirth() {
+  const c = child();
+  birthForm.birthDate.value = c.birthDate || todayStr();
+  birthForm.querySelector(`input[name="sex"][value="${c.sex || ''}"]`).checked = true;
+  birthForm.weightG.value = c.birth?.weightG ?? '';
+  birthForm.lengthCm.value = c.birth?.lengthCm ?? '';
+  birthForm.headCm.value = c.birth?.headCm ?? '';
+  birthForm.chestCm.value = c.birth?.chestCm ?? '';
+  document.getElementById('clear-birth').hidden = !isBorn(c);
+  updateBirthGest();
+  dialogs.birth.showModal();
+}
+
+birthForm.birthDate.addEventListener('change', updateBirthGest);
+
+birthForm.addEventListener('submit', (e) => {
+  const date = birthForm.birthDate.value;
+  const d = parseDate(date);
+  if (!d || diffDays(d, today()) > 0) {
+    e.preventDefault();
+    toast('生年月日を確認してください');
+    return;
+  }
+  const c = child();
+  const first = !isBorn(c);
+  Object.assign(c, {
+    birthDate: date,
+    sex: birthForm.sex.value,
+    birth: {
+      weightG: num(birthForm.weightG.value),
+      lengthCm: num(birthForm.lengthCm.value),
+      headCm: num(birthForm.headCm.value),
+      chestCm: num(birthForm.chestCm.value),
+    },
+    updatedAt: Date.now(),
+  });
+  persist();
+  dialogs.settings.close();
+  if (first) {
+    ui.growthView = 'records';
+    switchTab('home');
+    toast('ご出産おめでとうございます 🎉', 3500);
+  } else {
+    render();
+    toast('保存しました');
+  }
+});
+
+// ---------- できごと ----------
+
+function openMilestone({ id = null, templateId = null } = {}) {
+  const r = id ? state.milestones.find((m) => m.id === id) : null;
+  const t = milestoneTemplate(r?.templateId ?? templateId);
+  milestoneForm.reset();
+  milestoneForm.id.value = r?.id || '';
+  milestoneForm.templateId.value = r?.templateId || t?.id || '';
+  milestoneForm.date.value = r?.date || todayStr();
+  milestoneForm.title.value = r?.title || t?.title || '';
+  milestoneForm.note.value = r?.note || '';
+  document.getElementById('milestone-title').textContent = `${t ? t.emoji : '🌟'} ${r ? 'できごと' : 'できごとを記録'}`;
+  document.getElementById('delete-milestone').hidden = !r;
+  const old = milestoneForm.querySelector('.photo-strip');
+  old?.remove();
+  if (r?.photoIds?.length) {
+    milestoneForm.photos.closest('label').insertAdjacentHTML('afterend', photoStrip(r.photoIds));
+    media.hydrateImages(milestoneForm);
+  }
+  dialogs.milestone.showModal();
+}
+
+milestoneForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (busy) return;
+  const date = milestoneForm.date.value;
+  const title = milestoneForm.title.value.trim();
+  if (!parseDate(date) || !title) return;
+  busy = true;
+  try {
+    const photoIds = await importPhotos(milestoneForm.photos.files, { takenAt: date });
+    const existing = state.milestones.find((m) => m.id === milestoneForm.id.value);
+    store.upsert(state.milestones, {
+      ...(existing ? { id: existing.id } : { childId: child().id }),
+      date,
+      title,
+      templateId: milestoneForm.templateId.value || null,
+      note: milestoneForm.note.value.trim(),
+      photoIds: [...(existing?.photoIds || []), ...photoIds],
+    });
+    persist();
+    dialogs.milestone.close();
+    render();
+    if (!photoIds.length) toast('できごとを記録しました');
+  } finally {
+    busy = false;
+  }
+});
+
+// ---------- 写真ビューア ----------
+
+let viewerIds = [];
+let viewerIndex = 0;
+
+function openViewer(id) {
+  const scope = dialogs.milestone.open ? [...dialogs.milestone.querySelectorAll('[data-action="open-photo"]')].map((b) => b.dataset.id)
+    : [...view.querySelectorAll('[data-action="open-photo"]')].map((b) => b.dataset.id);
+  viewerIds = [...new Set(scope.length ? scope : [id])];
+  viewerIndex = Math.max(0, viewerIds.indexOf(id));
+  showViewerPhoto();
+  if (!dialogs.viewer.open) dialogs.viewer.showModal();
+}
+
+async function showViewerPhoto() {
+  const m = state.media.find((x) => x.id === viewerIds[viewerIndex]);
+  if (!m) {
+    dialogs.viewer.close();
+    return;
+  }
+  const img = document.getElementById('viewer-img');
+  img.removeAttribute('src');
+  document.getElementById('viewer-meta').textContent = `${m.takenAt}・${periodLabel(m.takenAt)}（${viewerIndex + 1}/${viewerIds.length}）`;
+  viewerForm.takenAt.value = m.takenAt;
+  viewerForm.caption.value = m.caption || '';
+  img.alt = m.caption || '写真';
+  dialogs.viewer.querySelector('[data-action="viewer-prev"]').disabled = viewerIndex === 0;
+  dialogs.viewer.querySelector('[data-action="viewer-next"]').disabled = viewerIndex >= viewerIds.length - 1;
+  const url = await media.fileUrl(m.id, 'full').catch(() => null);
+  if (url && viewerIds[viewerIndex] === m.id) img.src = url;
+}
+
+viewerForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const m = state.media.find((x) => x.id === viewerIds[viewerIndex]);
+  if (!m || !parseDate(viewerForm.takenAt.value)) return;
+  store.upsert(state.media, { id: m.id, takenAt: viewerForm.takenAt.value, caption: viewerForm.caption.value.trim() });
+  persist();
+  showViewerPhoto();
+  render();
+  toast('保存しました');
+});
+
+async function downloadViewerPhoto() {
+  const m = state.media.find((x) => x.id === viewerIds[viewerIndex]);
+  const url = m && await media.fileUrl(m.id, 'full').catch(() => null);
+  if (!url) return;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `baby-${m.takenAt}-${m.id.slice(0, 6)}.jpg`;
+  a.click();
+}
+
+// スワイプで前後の写真へ
+let touchX = null;
+dialogs.viewer.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+dialogs.viewer.addEventListener('touchend', (e) => {
+  if (touchX == null) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  touchX = null;
+  if (Math.abs(dx) < 50) return;
+  const next = viewerIndex + (dx < 0 ? 1 : -1);
+  if (next >= 0 && next < viewerIds.length) {
+    viewerIndex = next;
+    showViewerPhoto();
+  }
+});
+
+// ---------- 計測記録の保存 ----------
+
+async function saveRecord(form, type, fields) {
+  const date = form.date.value;
+  if (!parseDate(date)) return;
+  const values = Object.fromEntries(fields.map(([k, d]) => [k, round(num(form[k].value), d)]));
+  if (Object.values(values).every((v) => v == null || !(v > 0))) {
+    toast('少なくとも1つの項目を入力してください');
+    return;
+  }
+  for (const k of Object.keys(values)) if (!(values[k] > 0)) values[k] = null;
+  busy = true;
+  form.querySelector('button.primary').disabled = true;
+  try {
+    const photoIds = await importPhotos(form.photos.files, { takenAt: date });
+    const existing = state[type].find((r) => r.id === form.id.value);
+    store.upsert(state[type], {
+      ...(existing ? { id: existing.id } : { childId: child().id }),
+      date,
+      ...values,
+      note: form.note.value.trim(),
+      photoIds: [...(existing?.photoIds || []), ...photoIds],
+    });
+    ui.editing = null;
+    persist();
+    render();
+    if (!photoIds.length) toast(existing ? '更新しました' : '記録しました');
+  } finally {
+    busy = false;
   }
 }
 
@@ -513,99 +1343,155 @@ document.querySelector('.tabbar').addEventListener('click', (e) => {
   if (btn) switchTab(btn.dataset.tab);
 });
 
+const ACTIONS = {
+  'open-settings': () => openSettings(),
+  'close-dialog': (el) => el.closest('dialog')?.close(),
+  export: () => exportData(),
+  reset: async () => {
+    if (!confirm('すべてのデータ（写真を含む）を削除します。この操作は取り消せません。よろしいですか？')) return;
+    store.clear();
+    await media.clearFiles().catch(() => {});
+    state = store.defaultState();
+    dialogs.settings.close();
+    render();
+    toast('削除しました');
+  },
+  'open-birth': () => openBirth(),
+  'clear-birth': () => {
+    if (!confirm('誕生の登録を取り消しますか？（記録や写真は消えません）')) return;
+    Object.assign(child(), { birthDate: '', updatedAt: Date.now() });
+    persist();
+    dialogs.birth.close();
+    render();
+  },
+  'goto-tab': (el) => switchTab(el.dataset.tab),
+  'goto-week': (el) => {
+    selectedWeek = Number(el.dataset.week);
+    ui.growthView = 'guide';
+    switchTab('growth');
+  },
+  'select-week': (el) => {
+    selectedWeek = Number(el.dataset.week);
+    render();
+  },
+  'set-ui': (el) => {
+    ui[el.dataset.key] = el.dataset.value;
+    ui.editing = null;
+    render();
+  },
+  'edit-record': (el) => {
+    ui.editing = { type: el.dataset.type, id: el.dataset.id };
+    if (currentTab !== 'growth') {
+      ui.growthView = 'records';
+      currentTab = 'growth';
+      history.replaceState(null, '', '#growth');
+    }
+    render({ keepScroll: false });
+  },
+  'cancel-edit': () => {
+    ui.editing = null;
+    render();
+  },
+  'delete-record': (el) => {
+    if (!confirm('この記録を削除しますか？（添付した写真はアルバムに残ります）')) return;
+    store.remove(state, el.dataset.type, el.dataset.id);
+    if (ui.editing?.id === el.dataset.id) ui.editing = null;
+    persist();
+    render();
+  },
+  'new-milestone': (el) => openMilestone({ templateId: el.dataset.template || null }),
+  'edit-milestone': (el) => openMilestone({ id: el.dataset.id }),
+  'delete-milestone': () => {
+    const id = milestoneForm.id.value;
+    if (!id || !confirm('このできごとを削除しますか？（写真はアルバムに残ります）')) return;
+    store.remove(state, 'milestones', id);
+    persist();
+    dialogs.milestone.close();
+    render();
+  },
+  'open-photo': (el) => openViewer(el.dataset.id),
+  'viewer-prev': () => {
+    if (viewerIndex > 0) {
+      viewerIndex -= 1;
+      showViewerPhoto();
+    }
+  },
+  'viewer-next': () => {
+    if (viewerIndex < viewerIds.length - 1) {
+      viewerIndex += 1;
+      showViewerPhoto();
+    }
+  },
+  'viewer-download': () => downloadViewerPhoto(),
+  'viewer-delete': async () => {
+    if (!confirm('この写真を削除しますか？この操作は取り消せません。')) return;
+    const id = viewerIds[viewerIndex];
+    await deletePhoto(id);
+    viewerIds = viewerIds.filter((x) => x !== id);
+    viewerIndex = Math.min(viewerIndex, viewerIds.length - 1);
+    if (viewerIds.length) showViewerPhoto();
+    else dialogs.viewer.close();
+    render();
+    if (dialogs.milestone.open) dialogs.milestone.querySelector(`.photo[data-id="${CSS.escape(id)}"]`)?.remove();
+  },
+  'toggle-contraction': () => {
+    const active = activeContraction();
+    if (active) active.end = Date.now();
+    else state.contractions.push({ start: Date.now(), end: null });
+    persist();
+    render();
+  },
+  'clear-contractions': () => {
+    if (!confirm('陣痛の記録をすべて削除しますか？')) return;
+    state.contractions = [];
+    persist();
+    render();
+  },
+  'start-kick': () => {
+    state.kicks.push({ start: Date.now(), end: null, count: 0 });
+    persist();
+    render();
+  },
+  kick: () => {
+    const k = activeKick();
+    if (!k) return;
+    k.count += 1;
+    if (navigator.vibrate) navigator.vibrate(30);
+    if (k.count >= 10) {
+      k.end = Date.now();
+      toast(`10回に到達しました（${formatDuration((k.end - k.start) / 1000)}）`);
+    }
+    persist();
+    render();
+  },
+  'finish-kick': () => {
+    const k = activeKick();
+    if (!k) return;
+    if (k.count === 0) state.kicks.pop();
+    else k.end = Date.now();
+    persist();
+    render();
+  },
+  'delete-weight': (el) => {
+    state.weights = state.weights.filter((w) => w.date !== el.dataset.date);
+    persist();
+    render();
+  },
+  'delete-journal': (el) => {
+    if (!confirm('この日記を削除しますか？')) return;
+    state.journal = state.journal.filter((j) => String(j.id) !== el.dataset.id);
+    persist();
+    render();
+  },
+};
+
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-action]');
   if (!el || el.tagName === 'INPUT') return;
-  const { action } = el.dataset;
-
-  switch (action) {
-    case 'open-settings':
-      openSettings();
-      break;
-    case 'close-settings':
-      settingsDialog.close();
-      break;
-    case 'export':
-      exportData();
-      break;
-    case 'reset':
-      if (confirm('すべてのデータを削除します。この操作は取り消せません。よろしいですか？')) {
-        store.clear();
-        state = store.defaultState();
-        settingsDialog.close();
-        render();
-        toast('削除しました');
-      }
-      break;
-    case 'goto-week':
-      selectedWeek = Number(el.dataset.week);
-      switchTab('weeks');
-      break;
-    case 'select-week':
-      selectedWeek = Number(el.dataset.week);
-      render();
-      break;
-    case 'toggle-contraction': {
-      const active = activeContraction();
-      if (active) active.end = Date.now();
-      else state.contractions.push({ start: Date.now(), end: null });
-      persist();
-      render();
-      break;
-    }
-    case 'clear-contractions':
-      if (confirm('陣痛の記録をすべて削除しますか？')) {
-        state.contractions = [];
-        persist();
-        render();
-      }
-      break;
-    case 'start-kick':
-      state.kicks.push({ start: Date.now(), end: null, count: 0 });
-      persist();
-      render();
-      break;
-    case 'kick': {
-      const k = activeKick();
-      if (!k) break;
-      k.count += 1;
-      if (navigator.vibrate) navigator.vibrate(30);
-      if (k.count >= 10) {
-        k.end = Date.now();
-        toast(`10回に到達しました（${formatDuration((k.end - k.start) / 1000)}）`);
-      }
-      persist();
-      render();
-      break;
-    }
-    case 'finish-kick': {
-      const k = activeKick();
-      if (k) {
-        if (k.count === 0) state.kicks.pop();
-        else k.end = Date.now();
-        persist();
-        render();
-      }
-      break;
-    }
-    case 'delete-weight':
-      state.weights = state.weights.filter((w) => w.date !== el.dataset.date);
-      persist();
-      render();
-      break;
-    case 'delete-journal':
-      if (confirm('この日記を削除しますか？')) {
-        state.journal = state.journal.filter((j) => String(j.id) !== el.dataset.id);
-        persist();
-        render();
-      }
-      break;
-    default:
-      break;
-  }
+  ACTIONS[el.dataset.action]?.(el);
 });
 
-document.addEventListener('change', (e) => {
+document.addEventListener('change', async (e) => {
   const el = e.target;
   const { action } = el.dataset || {};
   if (action === 'check') {
@@ -618,9 +1504,26 @@ document.addEventListener('change', (e) => {
     else delete state.checkups[el.dataset.week];
     persist();
     render();
+  } else if (action === 'toggle-fetal') {
+    ui.withFetal = el.checked;
+    render();
   } else if (action === 'import' && el.files?.[0]) {
     importData(el.files[0]);
     el.value = '';
+  } else if (action === 'add-photos' && el.files?.length && !busy) {
+    busy = true;
+    try {
+      const ids = await importPhotos(el.files);
+      if (ids.length && currentTab === 'home') {
+        ui.albumView = 'photos';
+        switchTab('album');
+      } else {
+        render();
+      }
+    } finally {
+      busy = false;
+      el.value = '';
+    }
   }
 });
 
@@ -628,7 +1531,13 @@ document.addEventListener('submit', (e) => {
   const form = e.target.closest('[data-form]');
   if (!form) return;
   e.preventDefault();
-  if (form.dataset.form === 'weight') {
+  if (busy) return;
+  const kind = form.dataset.form;
+  if (kind === 'fetal') {
+    saveRecord(form, 'fetalRecords', [['efwG', 0], ['bpdMm', 1], ['flMm', 1], ['acMm', 1], ['crlMm', 1], ['fhrBpm', 0]]);
+  } else if (kind === 'growth') {
+    saveRecord(form, 'growthRecords', [['weightKg', 3], ['heightCm', 1], ['headCm', 1], ['chestCm', 1]]);
+  } else if (kind === 'weight') {
     const date = form.date.value;
     const kg = Number(form.kg.value);
     if (!parseDate(date) || !(kg > 0)) return;
@@ -637,10 +1546,10 @@ document.addEventListener('submit', (e) => {
     persist();
     render();
     toast('体重を記録しました');
-  } else if (form.dataset.form === 'journal') {
+  } else if (kind === 'journal') {
     const text = form.text.value.trim();
     if (!text) return;
-    state.journal.push({ id: Date.now(), date: formatDate(today()), mood: form.mood.value, text });
+    state.journal.push({ id: Date.now(), date: todayStr(), mood: form.mood.value, text });
     persist();
     render();
     toast('日記を保存しました');
@@ -655,9 +1564,8 @@ window.addEventListener('storage', () => {
 
 // ---------- 起動 ----------
 
-const initial = location.hash.slice(1);
-currentTab = RENDERERS[initial] ? initial : 'home';
-render({ keepScroll: false });
+const initialTab = location.hash.slice(1);
+switchTab(RENDERERS[initialTab] || LEGACY_TABS[initialTab] ? initialTab : 'home');
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

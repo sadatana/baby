@@ -1,5 +1,5 @@
 // オフラインでも使えるようにアプリ本体をキャッシュする
-const CACHE = 'maternity-app-v1';
+const CACHE = 'maternity-app-v2';
 const ASSETS = [
   './',
   'index.html',
@@ -8,6 +8,10 @@ const ASSETS = [
   'js/pregnancy.js',
   'js/data.js',
   'js/store.js',
+  'js/growth.js',
+  'js/standards.js',
+  'js/charts.js',
+  'js/media.js',
   'manifest.webmanifest',
   'icons/icon.svg',
 ];
