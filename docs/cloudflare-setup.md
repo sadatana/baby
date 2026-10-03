@@ -13,6 +13,16 @@
 
 ## 2. データベースと写真の保存場所を作る
 
+### 方法 A: ダッシュボードで作る（コマンド不要・おすすめ）
+
+1. Cloudflare ダッシュボード → **Storage & Databases → D1 SQL Database → Create Database**
+   - 名前: `maternity-app`（この名前で作成してください）
+   - 作成後の画面に表示される **Database ID** を控えておきます（手順 3 で使います）
+2. **R2 Object Storage → Create bucket**
+   - 名前: `maternity-app-media`
+
+### 方法 B: コマンドで作る
+
 パソコンに Node.js（v22 以上）を入れ、このリポジトリのフォルダで次を実行します。
 
 ```bash
@@ -23,10 +33,25 @@ npx wrangler@4 r2 bucket create maternity-app-media  # 写真の保存場所（R
 
 表示された `database_id` を控えておきます（手順 3 で使います）。
 
+#### `Authentication error [code: 10000]` と表示された場合
+
+コマンドが使っている認証情報に、D1 を操作する権限がありません。`npx wrangler@4 whoami` で確認できます。
+
+- **「API Token」でログインしていると表示される** → パソコンに環境変数 `CLOUDFLARE_API_TOKEN` が設定されていて、ブラウザでのログインより優先されています。
+  その API トークンに **D1: Edit** 権限を追加するか、環境変数を外してからやり直してください。
+  - Mac / Linux: `unset CLOUDFLARE_API_TOKEN`
+  - Windows（PowerShell）: `Remove-Item Env:CLOUDFLARE_API_TOKEN`
+- **「OAuth Token」と表示される** → `npx wrangler@4 logout` → `npx wrangler@4 login` でログインし直し、ブラウザの画面ですべての権限を許可してください。
+- 表示される **Account ID** が、エラーメッセージの `/accounts/…/` の部分と同じか確認してください（複数のアカウントがある場合）。
+
+解決しない場合は、方法 A（ダッシュボード）で作成すれば、このコマンドは不要です。
+
 ## 3. GitHub にシークレットを登録する
 
 1. Cloudflare ダッシュボード → 右上のアカウント → **My Profile → API Tokens → Create Token**
    - テンプレート **「Edit Cloudflare Workers」** を選び、さらに権限に **「D1: Edit」** を追加して作成します。
+   - **Account Resources** で、使うアカウントが選ばれていることを確認してください。
+   - D1 の権限がないと、GitHub Actions でも同じ `Authentication error [code: 10000]` になります。
 2. GitHub のリポジトリ → **Settings → Secrets and variables → Actions → New repository secret** で、次の 3 つを登録します。
 
 | 名前 | 値 |
