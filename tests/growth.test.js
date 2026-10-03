@@ -114,9 +114,24 @@ test('fetal EFW standard interpolation', () => {
   assert.equal(fetalEfwSd(40, 3125), 0);
 });
 
-test('infant percentiles: none until data is registered, then interpolated', () => {
-  assert.equal(infantPercentilesAt('weight', 'male', 1), null);
-  assert.equal(percentileBand('weight', 'male', 1, 4), null);
+test('infant percentiles use WHO standards (0-36 months)', () => {
+  const birth = infantPercentilesAt('weight', 'male', 0);
+  assert.equal(birth[3], 3.35); // WHO 男児 出生時 体重中央値 3.3kg
+  assert.equal(infantPercentilesAt('length', 'female', 12)[3], 74); // WHO 女児 12ヶ月 身長中央値 74.0cm
+  assert.equal(infantPercentilesAt('head', 'male', 36)[3], 49.46);
+  assert.equal(infantPercentilesAt('weight', 'male', 37), null);
+  for (const key of ['weight', 'length', 'head']) {
+    for (const sex of ['male', 'female']) {
+      assert.equal(INFANT_PERCENTILES[key][sex].length, 37);
+      for (const row of INFANT_PERCENTILES[key][sex]) {
+        assert.ok(row.p.every((v, i) => i === 0 || v > row.p[i - 1]), `${key} ${sex} ${row.month}`);
+      }
+    }
+  }
+  assert.equal(percentileBand('weight', 'female', 0, 3.23), '50〜75');
+});
+
+test('infant percentiles interpolate a registered table', () => {
   const saved = INFANT_PERCENTILES.weight.male;
   INFANT_PERCENTILES.weight.male = [
     { month: 0, p: [2, 2.5, 2.8, 3, 3.2, 3.5, 4] },

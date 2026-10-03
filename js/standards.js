@@ -1,5 +1,6 @@
 // 成長曲線の標準値データと補間（DOM非依存）
 // ※標準値は「目安」です。アプリ内では診断的な表現（正常・異常）はしません。
+import { WHO_PERCENTILES } from './who-percentiles.js';
 
 // ---------- 胎児の推定体重（EFW） ----------
 // 出典: 日本産科婦人科学会「胎児体重の妊娠週数ごとの基準値」（日本超音波医学会 2003 年の基準に基づく）
@@ -55,13 +56,15 @@ export function fetalEfwSd(week, grams) {
 // ---------- 出生後の発育曲線（パーセンタイル） ----------
 // 形式: INFANT_PERCENTILES[指標][性別] = [{ month, p: [3, 10, 25, 50, 75, 90, 97 パーセンタイル値] }, ...]
 //   指標: weight (kg) / length (cm) / head (cm)、性別: male / female
-// こども家庭庁「乳幼児身体発育調査」の数値を登録する。未登録の場合は曲線を表示せず、記録だけを表示する。
+// 現在は WHO Child Growth Standards（0〜36ヶ月）を使用。同じ形式の表に差し替えれば、
+// 日本の「乳幼児身体発育調査」などの基準にも切り替えられる。
+// ※WHO の身長は 24ヶ月未満が寝かせて測る「身長（仰臥位）」、24ヶ月以降が立って測る値（約0.7cm 低い）。
 export const PERCENTILES = [3, 10, 25, 50, 75, 90, 97];
-export const INFANT_SOURCE = 'こども家庭庁「乳幼児身体発育調査」';
+export const INFANT_SOURCE = 'WHO Child Growth Standards（世界保健機関の国際基準）';
 export const INFANT_PERCENTILES = {
-  weight: { male: [], female: [] },
-  length: { male: [], female: [] },
-  head: { male: [], female: [] },
+  weight: { male: WHO_PERCENTILES.weight.male, female: WHO_PERCENTILES.weight.female },
+  length: { male: WHO_PERCENTILES.length.male, female: WHO_PERCENTILES.length.female },
+  head: { male: WHO_PERCENTILES.head.male, female: WHO_PERCENTILES.head.female },
 };
 
 export function hasInfantStandard(indicator, sex) {

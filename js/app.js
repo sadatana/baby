@@ -603,8 +603,8 @@ function renderInfantChart(c, records, fetal) {
       </p>
       ${bandText ? `<p class="small">最新の記録は ${esc(bandText)} パーセンタイルの間です。</p>` : ''}
       ${!sex ? '<p class="muted small">性別を登録すると、男女別の発育曲線（標準の範囲）を重ねて表示できます。</p>'
-        : !hasStd ? `<p class="muted small">発育曲線の標準値（${esc(INFANT_SOURCE)}）は準備中です。いまは記録した値だけを表示しています。</p>`
-          : `<p class="muted small">標準値: ${esc(INFANT_SOURCE)}。</p>`}
+        : !hasStd ? '<p class="muted small">この期間の標準値はありません。記録した値だけを表示しています。</p>'
+          : `<p class="muted small">標準値: ${esc(INFANT_SOURCE)}（0〜3歳）。日本の母子健康手帳の発育曲線とは少し異なります。</p>`}
       <p class="muted small">発育曲線は一般的な目安です。気になることは健診で医師・保健師に相談してください。</p>
     </section>`;
 }

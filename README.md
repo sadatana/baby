@@ -22,7 +22,9 @@
 ### 成長曲線の標準値
 
 - 胎児の推定体重: 日本産科婦人科学会「胎児体重の妊娠週数ごとの基準値」（`js/standards.js`）
-- 出生後の発育曲線: こども家庭庁「乳幼児身体発育調査」の値を `js/standards.js` の `INFANT_PERCENTILES` に登録すると表示されます（**現在は未登録**のため、記録した値のみ表示）
+- 出生後の発育曲線（0〜3歳、男女別、3〜97パーセンタイル）: WHO Child Growth Standards（`js/who-percentiles.js`）
+  - `scripts/gen-who-percentiles.py` で WHO 公式の LMS 表から月ごとのパーセンタイル値を生成しています
+  - 日本の母子健康手帳（乳幼児身体発育調査）の曲線とは少し異なります。同じ形式の表を `js/standards.js` の `INFANT_PERCENTILES` に設定すれば差し替えられます
 
 ## 使い方
 
@@ -51,11 +53,13 @@ js/app.js             画面描画とイベント処理
 js/pregnancy.js       週数・予定日・健診・陣痛などの計算ロジック
 js/growth.js          月齢・タイムライン・できごとテンプレート・写真の撮影日（EXIF）
 js/standards.js       成長曲線の標準値と補間
+js/who-percentiles.js WHO 発育基準のパーセンタイル値（自動生成）
 js/charts.js          SVG グラフ
 js/media.js           写真の縮小と IndexedDB への保存
 js/data.js            週ごとの情報、チェックリストなどのコンテンツ
 js/store.js           localStorage への保存（v1 → v2 のデータ移行を含む）
 sw.js                 オフライン用 Service Worker
+scripts/              標準値データの生成スクリプト
 tests/                node:test によるテスト
 .github/workflows/    GitHub Pages への自動デプロイ
 ```
