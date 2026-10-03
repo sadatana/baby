@@ -14,7 +14,10 @@
 <body>
   <header class="app-header">
     <h1 class="app-title">マタニティ手帳</h1>
-    <button class="icon-btn" data-action="open-settings" aria-label="設定">⚙️</button>
+    <span class="header-actions">
+      <button class="icon-btn sync-status" id="sync-status" data-action="open-settings" hidden aria-label="家族共有の同期状態"></button>
+      <button class="icon-btn" data-action="open-settings" aria-label="設定">⚙️</button>
+    </span>
   </header>
 
   <main id="view" class="view" tabindex="-1"></main>
@@ -30,6 +33,8 @@
   <dialog id="settings" class="sheet">
     <form id="settings-form" method="dialog">
       <h2>設定</h2>
+      <section id="family-section" class="family"></section>
+      <div class="edit-only">
       <h3>👶 赤ちゃん</h3>
       <label>ニックネーム・名前（任意）
         <input type="text" name="babyName" maxlength="20" placeholder="例: まめちゃん">
@@ -42,6 +47,7 @@
         <input type="date" name="lmp">
       </label>
       <p><button type="button" class="btn ghost" data-action="open-birth">🎉 誕生を登録・編集</button></p>
+      </div>
       <h3>🤰 ママ</h3>
       <div class="row2">
         <label>身長 (cm)
@@ -61,7 +67,7 @@
         <p class="muted small">※ バックアップファイルには写真は含まれません。大切な写真は、写真を開いて「端末に保存」してください。</p>
         <div class="actions wrap">
           <button type="button" class="btn ghost" data-action="export">バックアップを保存</button>
-          <label class="btn ghost file-btn">バックアップから復元
+          <label class="btn ghost file-btn" id="import-label">バックアップから復元
             <input type="file" accept="application/json" data-action="import" hidden>
           </label>
           <button type="button" class="btn danger" data-action="reset">すべてのデータを削除</button>
@@ -125,11 +131,15 @@
         <input type="file" name="photos" accept="image/*" multiple>
       </label>
       <div class="actions">
-        <button type="button" class="btn danger" data-action="delete-milestone" id="delete-milestone">削除</button>
-        <button type="button" class="btn ghost" data-action="close-dialog">キャンセル</button>
-        <button type="submit" class="btn primary">保存</button>
+        <button type="button" class="btn danger edit-only" data-action="delete-milestone" id="delete-milestone">削除</button>
+        <button type="button" class="btn ghost" data-action="close-dialog">閉じる</button>
+        <button type="submit" class="btn primary edit-only">保存</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="account" class="sheet">
+    <div id="account-body"></div>
   </dialog>
 
   <dialog id="viewer" class="viewer">
@@ -152,11 +162,12 @@
         </label>
       </div>
       <div class="actions wrap">
-        <button type="submit" class="btn primary small">保存</button>
+        <button type="submit" class="btn primary small edit-only">保存</button>
         <button type="button" class="btn ghost small" data-action="viewer-download">端末に保存</button>
-        <button type="button" class="btn danger small" data-action="viewer-delete">削除</button>
+        <button type="button" class="btn danger small edit-only" data-action="viewer-delete">削除</button>
       </div>
     </form>
+    <div id="viewer-social" class="viewer-social"></div>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

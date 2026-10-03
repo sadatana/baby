@@ -1,0 +1,78 @@
+# Cloudflare への公開手順（家族共有を使うために）
+
+家族共有（ログイン・同期・写真の共有）は、Cloudflare Workers・D1・R2 で動きます。
+最初に一度だけ、以下の準備が必要です。準備が終わると、デフォルトブランチに push するたびに GitHub Actions が自動で公開します。
+
+所要時間: 20〜30 分程度
+
+## 1. Cloudflare アカウントを作る
+
+1. https://dash.cloudflare.com/sign-up でアカウントを作成します（無料プランで使えます）。
+2. 写真の保存（R2）を使うため、ダッシュボードの **R2** を開き、案内に従って有効にします。
+   - 支払い方法の登録が必要ですが、無料枠（保存 10GB まで）の範囲なら請求はありません。
+
+## 2. データベースと写真の保存場所を作る
+
+パソコンに Node.js（v22 以上）を入れ、このリポジトリのフォルダで次を実行します。
+
+```bash
+npx wrangler@4 login                               # ブラウザで Cloudflare にログイン
+npx wrangler@4 d1 create maternity-app             # データベース（D1）を作成 → database_id が表示される
+npx wrangler@4 r2 bucket create maternity-app-media  # 写真の保存場所（R2）を作成
+```
+
+表示された `database_id` を控えておきます（手順 3 で使います）。
+
+## 3. GitHub にシークレットを登録する
+
+1. Cloudflare ダッシュボード → 右上のアカウント → **My Profile → API Tokens → Create Token**
+   - テンプレート **「Edit Cloudflare Workers」** を選び、さらに権限に **「D1: Edit」** を追加して作成します。
+2. GitHub のリポジトリ → **Settings → Secrets and variables → Actions → New repository secret** で、次の 3 つを登録します。
+
+| 名前 | 値 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | 作成した API トークン |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare ダッシュボードの右側に表示される「Account ID」 |
+| `D1_DATABASE_ID` | 手順 2 で表示された `database_id` |
+
+## 4. 公開する
+
+デフォルトブランチに push（または Actions タブで「Deploy to Cloudflare」を手動実行）すると、
+テスト → データベースの更新（migrations）→ 公開 の順に実行されます。
+
+公開 URL は `https://maternity-app.<アカウントのサブドメイン>.workers.dev` です（Cloudflare ダッシュボードの Workers で確認できます）。
+独自ドメインを使う場合は、Workers の設定 → **Domains & Routes** から追加できます。
+
+> パスキーは公開したドメインに結び付きます。あとからドメインを変えると、登録済みのパスキーは使えなくなります
+> （その場合は「再ログイン用リンク」や復旧コードで登録し直せます）。最初に使うドメインを決めてから家族を招待するのがおすすめです。
+
+## 5. GitHub Pages からの移行
+
+これまでの GitHub Pages（https://sadatana.github.io/baby/）も、端末内だけで使うアプリとしてそのまま動きます（家族共有は使えません）。
+GitHub Pages で記録していた場合は、次の手順で新しい URL に移せます。
+
+1. 古い URL のアプリで、設定 → データの管理 →「バックアップを保存」
+2. 新しい URL のアプリで「バックアップから復元」（写真はバックアップに含まれないため、追加し直してください）
+3. 設定 →「家族グループを作る」
+
+移行が終わったら、`.github/workflows/pages.yml` を削除すると GitHub Pages への公開を止められます。
+
+## ローカルでの動作確認
+
+```bash
+npm run dev      # http://localhost:8787 （データは .dev/ に保存。--memory を付けると保存しない）
+npm test         # 計算ロジック・同期・API のテスト
+```
+
+ローカルでは D1 の代わりに SQLite（Node.js 標準の `node:sqlite`）、R2 の代わりに `.dev/media/` を使います。
+`localhost` はパスキーが使える安全な環境として扱われるため、パソコンのブラウザでログインまで試せます。
+
+## 無料枠の目安
+
+| サービス | 無料枠 | 家族数人での想定 |
+| --- | --- | --- |
+| Workers | 10 万リクエスト/日 | 数百〜数千 |
+| D1 | 5GB・読み取り 500 万行/日 | 数 MB |
+| R2 | 保存 10GB・取り出し無料 | 3 年で 2〜3GB |
+
+最新の条件は Cloudflare の料金ページで確認してください。

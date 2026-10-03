@@ -15,6 +15,8 @@ import {
 import { lineChart, ticks } from './charts.js';
 import * as store from './store.js';
 import * as media from './media.js';
+import * as api from './api.js';
+import { createSyncEngine } from './sync.js';
 
 let state = store.load();
 let currentTab = 'home';
@@ -27,7 +29,9 @@ const ui = {
   albumView: 'timeline', // timeline | photos | milestones
   timelineFilter: 'all',
   momView: 'records', // records | tools
+  momOwner: null, // ママタブで表示する人（null: 自動 / 'me' / ユーザー ID）
   editing: null, // { type, id } 計測記録の編集中
+  openComments: new Set(), // コメント欄を開いている記録
 };
 
 const view = document.getElementById('view');
@@ -50,7 +54,75 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
 
 function persist() {
   if (!store.save(state)) toast('保存できませんでした（ストレージの空き容量を確認してください）');
+  syncEngine.schedule();
 }
+
+// ---------- 家族共有（同期） ----------
+
+const syncEngine = createSyncEngine(api, {
+  getState: () => state,
+  saveState: () => store.save(state),
+  onChange: () => {
+    ensureChild();
+    requestRender();
+  },
+  onStatus: updateSyncStatus,
+  onSignedOut: (reason) => {
+    toast(reason === 'removed' ? '家族グループから外れました。設定から確認してください' : 'ログインの有効期限が切れました。設定から再ログインしてください', 5000);
+    updateRoleUi();
+  },
+  removeMediaFile: (id) => media.deleteFile(id).catch(() => {}),
+  readMediaFile: (id) => media.getFile(id),
+});
+const account = () => syncEngine.account;
+const canEdit = () => !account() || account().role !== 'viewer';
+const isAdmin = () => account()?.role === 'admin';
+// ママの記録・コメントなどが自分のものか（ログインしていなければすべて自分のもの）
+const isMine = (r) => !account() || !r?.ownerId || r.ownerId === account().userId;
+const memberName = (uid) => (uid && account()?.members?.[uid]?.displayName) || (uid === account()?.userId ? account()?.displayName : '') || '家族';
+const ROLE_LABELS = { admin: '管理者', editor: '編集者', viewer: '閲覧者' };
+
+if (account()) {
+  media.setRemote((id, size) => api.fetchMedia(account().groupId, id, size));
+}
+
+function updateRoleUi() {
+  document.body.dataset.role = account()?.role || '';
+  updateSyncStatus(null);
+}
+
+function updateSyncStatus(st) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  const a = account();
+  el.hidden = !a;
+  if (!a) return;
+  const status = st || {};
+  const error = a.error;
+  el.textContent = error === 'signed_out' || error === 'removed' ? '⚠️' : status.syncing ? '🔄' : error ? '☁️⚠' : '☁️';
+  el.title = error === 'offline' ? 'オフライン（つながったら同期します）'
+    : error ? '同期できませんでした' : status.syncing ? '同期中…' : `同期済み${a.lastSyncAt ? `（${new Date(a.lastSyncAt).toLocaleTimeString('ja-JP')}）` : ''}`;
+  const info = document.getElementById('sync-info');
+  if (info) info.textContent = el.title;
+}
+
+// 入力中に画面を書き換えると入力が消えるため、家族の更新は入力が終わってから反映する
+let pendingRender = false;
+function isEditing() {
+  const el = document.activeElement;
+  const typing = el && view.contains(el) && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'file'].includes(el.type)));
+  return typing || Object.values(dialogs).some((d) => d.open && d !== dialogs.settings);
+}
+function requestRender() {
+  if (isEditing()) pendingRender = true;
+  else render();
+}
+document.addEventListener('focusout', () => setTimeout(() => {
+  if (pendingRender && !isEditing()) {
+    pendingRender = false;
+    render();
+  }
+}, 0));
 
 let toastTimer;
 function toast(msg, ms = 2400) {
@@ -61,9 +133,22 @@ function toast(msg, ms = 2400) {
   if (ms) toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+const FALLBACK_CHILD = store.newChild();
 function child() {
-  return state.children.find((c) => c.id === state.activeChildId) || state.children[0];
+  return state.children.find((c) => c.id === state.activeChildId) || state.children[0] || FALLBACK_CHILD;
 }
+
+// 子どもの記録がまだない場合（家族グループに参加した直後など）に 1 人目を用意する
+function ensureChild() {
+  if (!state.children.some((c) => c.id === state.activeChildId)) state.activeChildId = state.children[0]?.id ?? null;
+  if (!state.children.length && canEdit() && !syncPending) {
+    const c = store.newChild();
+    state.children.push(c);
+    state.activeChildId = c.id;
+    persist();
+  }
+}
+let syncPending = false;
 
 function dueDate() {
   return parseDate(child().dueDate);
@@ -111,6 +196,7 @@ function photoThumb(id) {
 
 const timeFmt = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const shortDateFmt = new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const safeTime = (fmt, ms) => (Number.isFinite(Number(ms)) ? fmt.format(Number(ms)) : '--');
 
 // ---------- 写真の取り込み ----------
 
@@ -136,6 +222,7 @@ async function importPhotos(files, { takenAt = null } = {}) {
         updatedAt: now,
       });
       ids.push(id);
+      syncEngine.markLocalMedia(id);
     } catch {
       failed += 1;
     }
@@ -204,7 +291,7 @@ function renderHome() {
     </section>
 
     ${ga.week >= 34 ? `
-    <section class="card born-card">
+    <section class="card born-card edit-only">
       <p>${babyLabel()}が生まれたら、誕生を登録しましょう。月齢の表示や発育曲線に切り替わります。</p>
       <button class="btn primary" data-action="open-birth">🎉 誕生を登録する</button>
     </section>` : ''}
@@ -224,7 +311,7 @@ function renderHome() {
     <section class="card link-card" data-action="goto-tab" data-tab="growth">
       <h3>📏 前回の健診の記録</h3>
       <p>${esc(lastFetal.date)}（${esc(periodLabel(lastFetal.date))}）
-        ${lastFetal.efwG ? `推定体重 <strong>${lastFetal.efwG}g</strong>` : ''}</p>
+        ${lastFetal.efwG ? `推定体重 <strong>${esc(lastFetal.efwG)}g</strong>` : ''}</p>
     </section>` : ''}
 
     <section class="card">
@@ -287,7 +374,7 @@ function renderBabyHome() {
       <h3>🌱 これからの「初めて」</h3>
       <ul class="plain">
         ${nextTemplates.map((m) => `<li>${m.emoji} ${esc(m.title)} <span class="muted small">${esc(m.hint)}</span>
-          <button class="btn ghost tiny" data-action="new-milestone" data-template="${m.id}">記録</button></li>`).join('')}
+          <button class="btn ghost tiny edit-only" data-action="new-milestone" data-template="${m.id}">記録</button></li>`).join('')}
       </ul>
       <p class="muted small">時期は一般的な目安です。発達には個人差があります。</p>
     </section>` : ''}`;
@@ -295,7 +382,7 @@ function renderBabyHome() {
 
 function renderQuickActions() {
   return `
-    <section class="quick">
+    <section class="quick edit-only">
       <label class="quick-btn">📷<span>写真を追加</span>
         <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
       </label>
@@ -338,7 +425,7 @@ const FETAL_METRICS = [
 
 function fetalValues(r) {
   return FETAL_METRICS.filter(([k]) => r[k] != null)
-    .map(([k, label, unit]) => `<span class="val">${label.split(' ')[0]} <strong>${r[k]}</strong>${unit}</span>`).join('');
+    .map(([k, label, unit]) => `<span class="val">${label.split(' ')[0]} <strong>${esc(r[k])}</strong>${unit}</span>`).join('');
 }
 
 function editingRecord(type) {
@@ -351,7 +438,7 @@ function renderFetal() {
   const rec = editingRecord('fetalRecords') || {};
   const records = mine(state.fetalRecords).sort(byDateDesc);
   return `
-    <section class="card">
+    <section class="card edit-only">
       <h2>${rec.id ? '✏️ 健診の記録を編集' : '📏 健診の記録'}</h2>
       <p class="muted small">エコーで測った値を、わかる項目だけ入力してください。</p>
       <form data-form="fetal" class="record-form">
@@ -389,7 +476,7 @@ function recordItem(type, r, valuesHtml) {
   return `<li>
     <div class="record-head">
       <span>${esc(r.date)} <span class="muted">${esc(periodLabel(r.date))}</span></span>
-      <span>
+      <span class="edit-only">
         <button class="icon-btn small" data-action="edit-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="編集">✏️</button>
         <button class="icon-btn small" data-action="delete-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="削除">✕</button>
       </span>
@@ -468,14 +555,14 @@ const INFANT_METRICS = [
 function growthValues(r) {
   return [
     ['heightCm', '身長', 'cm'], ['weightKg', '体重', 'kg'], ['headCm', '頭囲', 'cm'], ['chestCm', '胸囲', 'cm'],
-  ].filter(([k]) => r[k] != null).map(([k, l, u]) => `<span class="val">${l} <strong>${r[k]}</strong>${u}</span>`).join('');
+  ].filter(([k]) => r[k] != null).map(([k, l, u]) => `<span class="val">${l} <strong>${esc(r[k])}</strong>${u}</span>`).join('');
 }
 
 function birthValues(c) {
   const b = c.birth || {};
   return [
     [b.weightG, '体重', 'g'], [b.lengthCm, '身長', 'cm'], [b.headCm, '頭囲', 'cm'], [b.chestCm, '胸囲', 'cm'],
-  ].filter(([v]) => v != null).map(([v, l, u]) => `<span class="val">${l} <strong>${v}</strong>${u}</span>`).join('');
+  ].filter(([v]) => v != null).map(([v, l, u]) => `<span class="val">${l} <strong>${esc(v)}</strong>${u}</span>`).join('');
 }
 
 function renderInfant() {
@@ -488,14 +575,14 @@ function renderInfant() {
     <section class="card">
       <div class="record-head">
         <h2>🎉 生まれたとき</h2>
-        <button class="btn ghost tiny" data-action="open-birth">編集</button>
+        <button class="btn ghost tiny edit-only" data-action="open-birth">編集</button>
       </div>
       <p>${formatDateJa(parseDate(c.birthDate))}${gest ? `（在胎${gest.week}週${gest.day}日）` : ''}
         ${c.sex ? `・${c.sex === 'male' ? '男の子' : '女の子'}` : ''}</p>
       <div class="vals">${birthValues(c) || '<span class="muted small">生まれたときの大きさは未入力です</span>'}</div>
     </section>
 
-    <section class="card">
+    <section class="card edit-only">
       <h2>${rec.id ? '✏️ 計測を編集' : '📏 身長・体重の記録'}</h2>
       <form data-form="growth" class="record-form">
         <input type="hidden" name="id" value="${esc(rec.id || '')}">
@@ -663,7 +750,7 @@ function renderWeeks() {
 function renderAlbum() {
   const head = segmented('albumView', ui.albumView, [['timeline', 'タイムライン'], ['photos', '写真'], ['milestones', 'できごと']]);
   const add = `
-    <div class="album-actions">
+    <div class="album-actions edit-only">
       <label class="btn primary file-btn">📷 写真を追加
         <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
       </label>
@@ -703,32 +790,88 @@ function timelineItem(item) {
   const date = `<span class="tl-date">${esc(item.date)}</span>`;
   switch (item.kind) {
     case 'fetal':
-      return `<li class="tl tl-measure">${date}<p class="tl-title">📏 健診の記録</p>
+      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">📏 健診の記録</p>
         <div class="vals">${fetalValues(item.record)}</div>
-        ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}</li>`;
+        ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}
+        ${socialBar('fetal', item.record.id)}</li>`;
     case 'growth':
-      return `<li class="tl tl-measure">${date}<p class="tl-title">📏 計測</p>
+      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">📏 計測</p>
         <div class="vals">${growthValues(item.record)}</div>
-        ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}</li>`;
+        ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}
+        ${socialBar('growth', item.record.id)}</li>`;
     case 'birth':
       return `<li class="tl tl-birth">${date}<p class="tl-title">🎉 ${babyLabel()}誕生！</p>
-        <div class="vals">${birthValues(item.record)}</div></li>`;
+        <div class="vals">${birthValues(item.record)}</div>${socialBar('birth', `birth:${item.record.id}`)}</li>`;
     case 'milestone': {
       const t = milestoneTemplate(item.record.templateId);
       return `<li class="tl tl-milestone">${date}
         <p class="tl-title">${t ? t.emoji : '🌟'} ${esc(item.record.title)}
-          <button class="icon-btn small" data-action="edit-milestone" data-id="${esc(item.record.id)}" aria-label="編集">✏️</button></p>
-        ${item.record.note ? `<p class="note">${esc(item.record.note).replace(/\n/g, '<br>')}</p>` : ''}${photoStrip(item.record.photoIds)}</li>`;
+          <button class="icon-btn small" data-action="edit-milestone" data-id="${esc(item.record.id)}" aria-label="開く">✏️</button></p>
+        ${item.record.note ? `<p class="note">${esc(item.record.note).replace(/\n/g, '<br>')}</p>` : ''}${photoStrip(item.record.photoIds)}
+        ${socialBar('milestone', item.record.id)}</li>`;
     }
     case 'photos':
       return `<li class="tl tl-photo">${date}<p class="tl-title">📷 写真 ${item.media.length}枚</p>
         <div class="photo-strip">${item.media.map((m) => photoThumb(m.id)).join('')}</div></li>`;
     case 'journal':
-      return `<li class="tl tl-journal">${date}<p class="tl-title">${esc(item.record.mood)} 日記</p>
-        <p class="note">${esc(item.record.text).replace(/\n/g, '<br>')}</p></li>`;
+      return `<li class="tl tl-journal">${date}${isMine(item.record) ? '' : byline(item.record, true)}<p class="tl-title">${esc(item.record.mood)} 日記${item.record.private ? ' 🔒' : ''}</p>
+        <p class="note">${esc(item.record.text).replace(/\n/g, '<br>')}</p>${socialBar('journal', String(item.record.id))}</li>`;
     default:
       return '';
   }
+}
+
+// 家族共有中: 誰が記録したか
+function byline(r, owner = false) {
+  if (!account()) return '';
+  const uid = owner ? r.ownerId : (r.updatedBy || r.createdBy);
+  return uid ? `<span class="byline">${esc(memberName(uid))}</span>` : '';
+}
+
+// ---------- リアクション・コメント ----------
+
+const REACTIONS = ['❤️', '👏', '🥰', '😂'];
+
+function socialBar(targetType, targetId) {
+  if (!account() || targetId == null) return '';
+  const me = account().userId;
+  const reactions = state.reactions.filter((r) => r.targetId === targetId);
+  const comments = state.comments.filter((c) => c.targetId === targetId).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  const open = ui.openComments.has(targetId);
+  return `<div class="social">
+    <div class="social-row">
+      ${REACTIONS.map((emoji, i) => {
+        const who = reactions.filter((r) => r.emoji === emoji);
+        const mine = who.some((r) => r.id === `${me}.${targetId}.${i}`);
+        return `<button class="react ${mine ? 'mine' : ''}" aria-pressed="${mine}" data-action="react" data-type="${targetType}"
+          data-target="${esc(targetId)}" data-i="${i}" title="${esc(who.map((r) => memberName(r.ownerId || me)).join('、'))}">${emoji}${who.length ? `<span>${who.length}</span>` : ''}</button>`;
+      }).join('')}
+      <button class="react comment-toggle" data-action="toggle-comments" data-target="${esc(targetId)}" aria-expanded="${open}">💬${comments.length ? `<span>${comments.length}</span>` : ''}</button>
+    </div>
+    ${open ? `<div class="comments">
+      ${comments.map((c) => `<p class="comment"><strong>${esc(memberName(c.ownerId || me))}</strong> ${esc(c.text)}
+        ${isMine(c) || isAdmin() ? `<button class="icon-btn small" data-action="delete-comment" data-id="${esc(c.id)}" aria-label="コメントを削除">✕</button>` : ''}</p>`).join('')}
+      <form data-form="comment" class="comment-form">
+        <input type="hidden" name="targetType" value="${targetType}">
+        <input type="hidden" name="targetId" value="${esc(targetId)}">
+        <input name="text" maxlength="300" placeholder="コメントを書く" required autocomplete="off">
+        <button class="btn primary tiny">送信</button>
+      </form>
+    </div>` : ''}
+  </div>`;
+}
+
+function toggleReaction(targetType, targetId, i) {
+  const id = `${account().userId}.${targetId}.${i}`;
+  const idx = state.reactions.findIndex((r) => r.id === id);
+  if (idx >= 0) state.reactions.splice(idx, 1);
+  else state.reactions.push({ id, targetType, targetId, emoji: REACTIONS[i], createdAt: Date.now() });
+  persist();
+}
+
+function rerenderSocial() {
+  render();
+  if (dialogs.viewer.open) renderViewerSocial();
 }
 
 function albumPhotos() {
@@ -763,7 +906,7 @@ function renderMilestones() {
             <span class="ms-body"><strong>${esc(t.title)}</strong>
               <small class="muted">${r ? `${esc(r.date)}（${esc(periodLabel(r.date))}）` : esc(t.hint)}</small></span>
             ${r ? `<button class="btn ghost tiny" data-action="edit-milestone" data-id="${esc(r.id)}">見る</button>`
-              : `<button class="btn ghost tiny" data-action="new-milestone" data-template="${t.id}">記録</button>`}
+              : `<button class="btn ghost tiny edit-only" data-action="new-milestone" data-template="${t.id}">記録</button>`}
           </li>`;
         }).join('')}
       </ul>
@@ -786,40 +929,92 @@ function renderMilestones() {
 
 // ---------- ママ（体重・日記・陣痛・胎動） ----------
 
+// 記録した人（'me' または家族のユーザー ID）
+const ownerKey = (r) => (isMine(r) ? 'me' : r.ownerId);
+const MOM_COLLECTIONS = ['weights', 'journal', 'contractions', 'kicks'];
+
+function momOwners() {
+  const others = new Set();
+  for (const coll of MOM_COLLECTIONS) state[coll].forEach((r) => { if (!isMine(r)) others.add(r.ownerId); });
+  return [...others];
+}
+
+function currentMomOwner() {
+  const others = momOwners();
+  if (ui.momOwner && (ui.momOwner === 'me' ? canEdit() : others.includes(ui.momOwner))) return ui.momOwner;
+  const hasOwn = MOM_COLLECTIONS.some((c) => state[c].some(isMine));
+  return (!canEdit() || !hasOwn) && others.length ? others[0] : 'me';
+}
+
+const momList = (coll, owner = currentMomOwner()) => state[coll].filter((r) => ownerKey(r) === owner);
+
 function renderMom() {
+  const owner = currentMomOwner();
+  const others = momOwners();
   const head = segmented('momView', ui.momView, [['records', '⚖️ 体重・日記'], ['tools', '⏱️ 陣痛・胎動']]);
-  return head + (ui.momView === 'tools' ? renderTools() : renderRecords());
+  const ownerChips = others.length
+    ? chips('momOwner', owner, [...(canEdit() ? [['me', '自分']] : []), ...others.map((uid) => [uid, memberName(uid)])]) : '';
+  if (!canEdit() && !others.length) {
+    return `${head}<section class="card"><p class="muted">ママの記録は、共有されたときにここに表示されます。</p></section>`;
+  }
+  const readOnly = owner !== 'me';
+  return head + ownerChips
+    + (readOnly ? `<p class="muted small">${esc(memberName(owner))}さんが共有している記録です。</p>` : renderShareCard())
+    + (ui.momView === 'tools' ? renderTools(readOnly) : renderRecords(readOnly));
+}
+
+function renderShareCard() {
+  if (!account() || !canEdit()) return '';
+  const share = state.shares.find((x) => x.id === account().userId) || {};
+  const item = (key, label) => `<label class="toggle"><input type="checkbox" data-action="share-toggle" data-key="${key}" ${share[key] ? 'checked' : ''}> ${label}</label>`;
+  return `
+    <section class="card share-card">
+      <details>
+        <summary><h2>👪 家族への共有 <span class="count">${['weight', 'journal', 'labor'].filter((k) => share[k]).length}/3</span></h2></summary>
+        <p class="muted small">オンにした記録だけ、家族グループのメンバーが見られます。</p>
+        ${item('weight', '体重')}
+        ${item('journal', '日記（「自分だけ」にした日記は共有されません）')}
+        ${item('labor', '陣痛・胎動の記録')}
+      </details>
+    </section>`;
 }
 
 function activeContraction() {
-  const last = state.contractions[state.contractions.length - 1];
+  const own = momList('contractions', 'me');
+  const last = own[own.length - 1];
   return last && last.end == null ? last : null;
 }
 
 function activeKick() {
-  const last = state.kicks[state.kicks.length - 1];
+  const own = momList('kicks', 'me');
+  const last = own[own.length - 1];
   return last && last.end == null ? last : null;
 }
 
-function renderTools() {
-  const active = activeContraction();
-  const stats = contractionStats(state.contractions);
-  const recent = state.contractions.slice(-10).map((c, i, arr) => {
-    const prev = i > 0 ? arr[i - 1] : state.contractions[state.contractions.length - arr.length - 1];
+function renderTools(readOnly) {
+  const contractions = momList('contractions').sort((a, b) => a.start - b.start);
+  const kicks = momList('kicks').sort((a, b) => a.start - b.start);
+  const lastC = contractions[contractions.length - 1];
+  const active = lastC && lastC.end == null ? lastC : null;
+  const stats = contractionStats(contractions);
+  const recent = contractions.slice(-10).map((c, i, arr) => {
+    const prev = i > 0 ? arr[i - 1] : contractions[contractions.length - arr.length - 1];
     const interval = prev ? (c.start - prev.start) / 1000 : null;
     return { ...c, interval };
   }).reverse();
 
-  const kick = activeKick();
-  const kickHistory = state.kicks.filter((k) => k.end != null).slice(-5).reverse();
+  const lastK = kicks[kicks.length - 1];
+  const kick = lastK && lastK.end == null ? lastK : null;
+  const kickHistory = kicks.filter((k) => k.end != null).slice(-5).reverse();
 
   return `
     <section class="card">
       <h2>⏱️ 陣痛タイマー</h2>
+      ${readOnly ? (active ? '<p class="alert">いま陣痛を計測中です</p>' : '') : `
       <p class="muted small">痛みが始まったら「開始」、おさまったら「終了」をタップ。間隔（開始〜次の開始）と持続時間を記録します。</p>
       <button class="big-btn ${active ? 'stop' : ''}" data-action="toggle-contraction">
         ${active ? '陣痛おさまった（終了）' : '陣痛きた（開始）'}
-      </button>
+      </button>`}
       ${active ? `<p class="live">持続時間 <strong data-live-since="${active.start}">0秒</strong></p>` : ''}
       <div class="stats">
         <div><span>平均間隔</span><strong>${formatDuration(stats.avgIntervalSec)}</strong></div>
@@ -833,30 +1028,31 @@ function renderTools() {
         <thead><tr><th>開始</th><th>持続</th><th>間隔</th></tr></thead>
         <tbody>
           ${recent.map((c) => `<tr>
-            <td>${timeFmt.format(c.start)}</td>
+            <td>${safeTime(timeFmt, c.start)}</td>
             <td>${c.end ? formatDuration((c.end - c.start) / 1000) : '計測中'}</td>
             <td>${formatDuration(c.interval)}</td>
           </tr>`).join('')}
         </tbody>
       </table>
-      <button class="btn ghost small" data-action="clear-contractions">記録をリセット</button>` : ''}
+      ${readOnly ? '' : '<button class="btn ghost small" data-action="clear-contractions">記録をリセット</button>'}` : ''}
     </section>
 
     <section class="card">
       <h2>👣 胎動カウンター</h2>
+      ${readOnly ? (kick ? `<p>カウント中: <strong>${esc(kick.count)}</strong> / 10</p>` : '') : `
       <p class="muted small">赤ちゃんが動いたらタップ。10回動くまでの時間を測ります（目安として妊娠28週ごろから）。</p>
       ${kick ? `
-        <button class="big-btn kick" data-action="kick">👣 動いた！ <strong>${kick.count}</strong> / 10</button>
+        <button class="big-btn kick" data-action="kick">👣 動いた！ <strong>${esc(kick.count)}</strong> / 10</button>
         <p class="live">経過時間 <strong data-live-since="${kick.start}">0秒</strong></p>
         <button class="btn ghost small" data-action="finish-kick">カウントを終了</button>
-      ` : '<button class="big-btn" data-action="start-kick">カウントを始める</button>'}
+      ` : '<button class="big-btn" data-action="start-kick">カウントを始める</button>'}`}
       ${kickHistory.length ? `
       <table class="log">
         <thead><tr><th>日時</th><th>回数</th><th>かかった時間</th></tr></thead>
         <tbody>
           ${kickHistory.map((k) => `<tr>
-            <td>${shortDateFmt.format(k.start)}</td>
-            <td>${k.count}回</td>
+            <td>${safeTime(shortDateFmt, k.start)}</td>
+            <td>${esc(k.count)}回</td>
             <td>${formatDuration((k.end - k.start) / 1000)}</td>
           </tr>`).join('')}
         </tbody>
@@ -865,15 +1061,14 @@ function renderTools() {
     </section>`;
 }
 
-function renderWeightChart(due) {
-  const pts = [...state.weights].sort(byDateAsc);
+function renderWeightChart(due, weights, pre) {
+  const pts = [...weights].sort(byDateAsc);
   if (pts.length < 2) return '';
   const xs = pts.map((p) => {
     const d = parseDate(p.date);
     return due ? gestationalAge(due, d).totalDays / 7 : diffDays(d, parseDate(pts[0].date)) / 7;
   });
   const ys = pts.map((p) => p.kg);
-  const pre = state.profile.preWeightKg;
   const minX = Math.floor(Math.min(...xs));
   const maxX = Math.max(Math.ceil(Math.max(...xs)), minX + 1);
   const minY = Math.floor(Math.min(...ys, pre ?? Infinity) - 1);
@@ -890,18 +1085,20 @@ function renderWeightChart(due) {
 
 const MOODS = ['😊', '😌', '😐', '😣', '😢'];
 
-function renderRecords() {
+function renderRecords(readOnly) {
   const due = dueDate();
-  const { heightCm, preWeightKg } = state.profile;
+  const { heightCm, preWeightKg } = readOnly ? {} : state.profile;
   const guide = weightGainGuide(heightCm, preWeightKg);
-  const weights = [...state.weights].sort(byDateDesc);
+  const weights = momList('weights').sort(byDateDesc);
   const latest = weights[0];
   const gain = latest && preWeightKg ? Math.round((latest.kg - preWeightKg) * 10) / 10 : null;
-  const journal = [...state.journal].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  const journal = momList('journal').sort((a, b) => b.date.localeCompare(a.date)
+    || (b.createdAt ?? Number(b.id) ?? 0) - (a.createdAt ?? Number(a.id) ?? 0));
 
   return `
     <section class="card">
       <h2>⚖️ 体重記録</h2>
+      ${readOnly ? '' : `
       <form class="inline-form" data-form="weight">
         <input type="date" name="date" value="${todayStr()}" required>
         <input type="number" name="kg" step="0.1" min="25" max="200" inputmode="decimal" placeholder="kg" required>
@@ -911,37 +1108,40 @@ function renderRecords() {
         <p class="small">妊娠前 BMI <strong>${guide.bmi}</strong>（${guide.category}）・
         増加の目安 <strong>${guide.range ? `${guide.range[0]}〜${guide.range[1]}kg` : '医師と相談（上限5kg程度が目安）'}</strong></p>
         ${gain != null ? `<p class="small">現在の増加: <strong>${gain > 0 ? '+' : ''}${gain}kg</strong></p>` : ''}
-      ` : '<p class="muted small">設定で身長と妊娠前の体重を入力すると、体重増加の目安が表示されます。</p>'}
-      ${renderWeightChart(due)}
+      ` : '<p class="muted small">設定で身長と妊娠前の体重を入力すると、体重増加の目安が表示されます。</p>'}`}
+      ${renderWeightChart(due, weights, readOnly ? null : preWeightKg)}
       ${weights.length ? `
       <ul class="entries">
         ${weights.slice(0, 8).map((w) => `<li>
           <span>${esc(w.date)}${due ? `（${gestationalAge(due, parseDate(w.date)).week}週）` : ''}</span>
-          <strong>${w.kg}kg</strong>
-          <button class="icon-btn small" data-action="delete-weight" data-date="${esc(w.date)}" aria-label="削除">✕</button>
+          <strong>${esc(w.kg)}kg</strong>
+          ${readOnly ? '' : `<button class="icon-btn small" data-action="delete-weight" data-id="${esc(w.id)}" aria-label="削除">✕</button>`}
         </li>`).join('')}
-      </ul>` : ''}
+      </ul>` : (readOnly ? '<p class="muted small">共有された体重の記録はありません。</p>' : '')}
     </section>
 
     <section class="card">
       <h2>📔 日記</h2>
+      ${readOnly ? '' : `
       <form data-form="journal" class="journal-form">
         <div class="moods">
           ${MOODS.map((m, i) => `<label><input type="radio" name="mood" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}
         </div>
         <textarea name="text" rows="3" maxlength="1000" placeholder="体調、健診で言われたこと、${babyLabel()}へのメッセージなど" required></textarea>
+        ${account() ? '<label class="toggle"><input type="checkbox" name="private"> 🔒 自分だけ（家族には見せない）</label>' : ''}
         <button class="btn primary">保存</button>
-      </form>
+      </form>`}
       ${journal.length ? `
       <ul class="journal">
         ${journal.map((j) => `<li>
           <div class="journal-head">
-            <span>${esc(j.mood)} ${esc(j.date)}・${esc(periodLabel(j.date))}</span>
-            <button class="icon-btn small" data-action="delete-journal" data-id="${esc(j.id)}" aria-label="削除">✕</button>
+            <span>${esc(j.mood)} ${esc(j.date)}・${esc(periodLabel(j.date))}${j.private ? ' 🔒' : ''}</span>
+            ${readOnly ? '' : `<button class="icon-btn small" data-action="delete-journal" data-id="${esc(j.id)}" aria-label="削除">✕</button>`}
           </div>
           <p>${esc(j.text).replace(/\n/g, '<br>')}</p>
+          ${socialBar('journal', String(j.id))}
         </li>`).join('')}
-      </ul>` : ''}
+      </ul>` : (readOnly ? '<p class="muted small">共有された日記はありません。</p>' : '')}
     </section>`;
 }
 
@@ -1065,6 +1265,9 @@ async function openSettings() {
   settingsForm.heightCm.value = state.profile.heightCm ?? '';
   settingsForm.preWeightKg.value = state.profile.preWeightKg ?? '';
   dialogs.settings.showModal();
+  document.getElementById('import-label').hidden = !!account();
+  familyMembers = null;
+  renderFamilySection();
   const est = await media.storageEstimate();
   document.getElementById('storage-usage').textContent = est?.usage != null
     ? `（使用量: 約${Math.round(est.usage / 1024 / 1024)}MB・写真${mine(state.media).length}枚）` : '';
@@ -1200,6 +1403,7 @@ function openMilestone({ id = null, templateId = null } = {}) {
   milestoneForm.note.value = r?.note || '';
   document.getElementById('milestone-title').textContent = `${t ? t.emoji : '🌟'} ${r ? 'できごと' : 'できごとを記録'}`;
   document.getElementById('delete-milestone').hidden = !r;
+  milestoneForm.querySelectorAll('input, textarea').forEach((i) => { i.disabled = !canEdit(); });
   const old = milestoneForm.querySelector('.photo-strip');
   old?.remove();
   if (r?.photoIds?.length) {
@@ -1262,10 +1466,22 @@ async function showViewerPhoto() {
   viewerForm.takenAt.value = m.takenAt;
   viewerForm.caption.value = m.caption || '';
   img.alt = m.caption || '写真';
+  viewerForm.takenAt.readOnly = !canEdit();
+  viewerForm.caption.readOnly = !canEdit();
+  renderViewerSocial();
   dialogs.viewer.querySelector('[data-action="viewer-prev"]').disabled = viewerIndex === 0;
   dialogs.viewer.querySelector('[data-action="viewer-next"]').disabled = viewerIndex >= viewerIds.length - 1;
   const url = await media.fileUrl(m.id, 'full').catch(() => null);
   if (url && viewerIds[viewerIndex] === m.id) img.src = url;
+}
+
+function renderViewerSocial() {
+  const el = document.getElementById('viewer-social');
+  const id = viewerIds[viewerIndex];
+  el.innerHTML = id ? socialBar('media', id) : '';
+  const m = state.media.find((x) => x.id === id);
+  const by = m && account() ? memberName(m.createdBy || m.ownerId) : '';
+  el.insertAdjacentHTML('afterbegin', by && m.ownerId ? `<p class="byline">${esc(by)}さんが追加</p>` : '');
 }
 
 viewerForm.addEventListener('submit', (e) => {
@@ -1336,6 +1552,424 @@ async function saveRecord(form, type, fields) {
   }
 }
 
+// ---------- 家族グループ（アカウント） ----------
+
+const accountDialog = document.getElementById('account');
+const accountBody = document.getElementById('account-body');
+let familyMembers = null; // 設定画面で表示するメンバー一覧
+let lastLink = null; // 直前に作った招待・端末追加のリンク { label, url }
+
+const linkUrl = (kind, token) => `${location.origin}${location.pathname}#${kind}=${encodeURIComponent(token)}`;
+const hasLocalRecords = () => ['fetalRecords', 'growthRecords', 'milestones', 'media', 'weights', 'journal']
+  .some((k) => state[k].length) || state.children.some((c) => c.dueDate || c.birthDate);
+
+function errorMessage(e) {
+  if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') return 'パスキーの操作がキャンセルされました';
+  if (e?.name === 'InvalidStateError') return 'この端末のパスキーはすでに登録されています';
+  const messages = {
+    network: '通信できませんでした。電波の良いところでお試しください',
+    invite_invalid: '招待リンクの有効期限が切れているか、すでに使われています。招待した人に新しいリンクをお願いしてください',
+    link_invalid: 'リンクの有効期限が切れているか、すでに使われています',
+    invalid_code: '復旧コードが正しくありません',
+    unknown_passkey: 'このパスキーは登録されていません',
+    last_admin: 'ほかに管理者がいないため、この操作はできません。先に別のメンバーを管理者にしてください',
+    forbidden: 'この操作の権限がありません',
+    invalid_name: '名前を入力してください（20文字まで）',
+  };
+  return messages[e?.code] || 'うまくいきませんでした。時間をおいてもう一度お試しください';
+}
+
+async function renderFamilySection() {
+  const el = document.getElementById('family-section');
+  if (!el) return;
+  const a = account();
+  if (!a) {
+    const ok = await api.available();
+    el.innerHTML = ok && api.passkeySupported() ? `
+      <h3>👪 家族と共有</h3>
+      <p class="small">パスキー（指紋・顔認証）でログインすると、パートナーや両親と記録・写真を共有できます。</p>
+      <div class="actions wrap">
+        <button type="button" class="btn primary" data-action="account-create">家族グループを作る</button>
+        <button type="button" class="btn ghost" data-action="account-login">ログイン</button>
+      </div>
+      <details class="small">
+        <summary>パスキーをなくした場合</summary>
+        <p class="muted small">グループを作ったときの復旧コードを入力してください。管理者から「再ログイン用リンク」をもらった場合は、そのリンクを開いてください。</p>
+        <div class="inline-form two">
+          <input name="recoveryCode" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters">
+          <button type="button" class="btn ghost" data-action="account-recover">復旧</button>
+        </div>
+      </details>`
+      : `<h3>👪 家族と共有</h3><p class="muted small">${ok ? 'このブラウザはパスキーに対応していないため、家族共有を使えません。' : '家族共有は、サーバー（Cloudflare）に公開したアプリで使えます。'}</p>`;
+    return;
+  }
+  const admin = a.role === 'admin';
+  const members = familyMembers;
+  el.innerHTML = `
+    <h3>👪 家族グループ</h3>
+    ${a.error === 'signed_out' ? '<p class="alert small">ログインの有効期限が切れました。<button type="button" class="btn primary tiny" data-action="account-login">再ログイン</button></p>' : ''}
+    ${a.error === 'removed' ? '<p class="alert small">この家族グループのメンバーではなくなりました。<button type="button" class="btn ghost tiny" data-action="account-logout">ログアウト</button></p>' : ''}
+    <p><strong>${esc(a.groupName)}</strong> <span class="badge">${ROLE_LABELS[a.role]}</span></p>
+    ${a.groups.length > 1 ? `<label class="small">表示するグループ
+      <select data-action="switch-group">${a.groups.map((g) => `<option value="${esc(g.id)}" ${g.id === a.groupId ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>` : ''}
+    <p class="small">あなたの名前: ${esc(a.displayName)} <button type="button" class="btn ghost tiny" data-action="account-rename">変更</button></p>
+    <p class="small muted"><span id="sync-info"></span> <button type="button" class="btn ghost tiny" data-action="sync-now">今すぐ同期</button></p>
+    <h4>メンバー</h4>
+    ${members ? `<ul class="members">${members.map((m) => `<li>
+      <span class="m-name">${esc(m.displayName)}${m.userId === a.userId ? '（あなた）' : ''}</span>
+      ${admin && m.userId !== a.userId ? `
+        <select data-action="member-role" data-uid="${esc(m.userId)}" aria-label="${esc(m.displayName)}の権限">
+          ${Object.entries(ROLE_LABELS).map(([r, l]) => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+        <button type="button" class="btn ghost tiny" data-action="member-relogin" data-uid="${esc(m.userId)}" title="端末をなくしたメンバー向け">再ログイン用リンク</button>
+        <button type="button" class="icon-btn small" data-action="member-remove" data-uid="${esc(m.userId)}" aria-label="${esc(m.displayName)}を外す">✕</button>`
+        : `<span class="muted small">${ROLE_LABELS[m.role]}</span>`}
+    </li>`).join('')}</ul>` : '<p class="muted small">読み込み中…</p>'}
+    <p class="muted small">管理者: すべての操作と家族の管理 ／ 編集者（パートナーなど）: 記録の追加・編集 ／ 閲覧者（両親・祖父母など）: 見る・リアクション・コメント</p>
+    ${admin ? `
+    <div class="inline-form two">
+      <select name="inviteRole" aria-label="招待する人の権限">
+        <option value="viewer">閲覧者として</option>
+        <option value="editor">編集者として</option>
+        <option value="admin">管理者として</option>
+      </select>
+      <button type="button" class="btn primary" data-action="invite">招待リンクを作る</button>
+    </div>` : ''}
+    ${lastLink ? `<div class="link-box">
+      <p class="small"><strong>${esc(lastLink.label)}</strong></p>
+      <input readonly value="${esc(lastLink.url)}" aria-label="リンク">
+      <div class="actions wrap">
+        <button type="button" class="btn ghost tiny" data-action="copy-link">コピー</button>
+        ${navigator.share ? '<button type="button" class="btn ghost tiny" data-action="share-link">LINE などで送る</button>' : ''}
+      </div>
+    </div>` : ''}
+    <details class="small">
+      <summary>ログインと端末</summary>
+      <div class="actions wrap">
+        <button type="button" class="btn ghost tiny" data-action="device-link">別の端末でもログインする</button>
+        <button type="button" class="btn ghost tiny" data-action="recovery-code">復旧コードを作り直す</button>
+        <button type="button" class="btn ghost tiny" data-action="account-logout">ログアウト</button>
+        ${admin ? '' : '<button type="button" class="btn danger tiny" data-action="group-leave">グループから抜ける</button>'}
+        <button type="button" class="btn danger tiny" data-action="account-delete">退会（アカウント削除）</button>
+      </div>
+    </details>`;
+  updateSyncStatus(null);
+  if (!members) loadMembers();
+}
+
+async function loadMembers() {
+  const a = account();
+  if (!a) return;
+  try {
+    const res = await api.members(a.groupId);
+    familyMembers = res.members;
+    syncEngine.setMembers(res.members);
+    const mine = res.members.find((m) => m.userId === a.userId);
+    if (mine && mine.role !== a.role) {
+      a.role = mine.role;
+      updateRoleUi();
+      render();
+    }
+  } catch {
+    familyMembers = [];
+  }
+  if (dialogs.settings.open) renderFamilySection();
+}
+
+function openAccount(html) {
+  accountBody.innerHTML = html;
+  if (!accountDialog.open) accountDialog.showModal();
+}
+
+function accountForm(kind, info = {}) {
+  const titles = {
+    create: '👪 家族グループを作る',
+    invite: '👪 家族グループに参加',
+    link: '📱 この端末でログイン',
+  };
+  const intro = {
+    create: '<p class="small">この端末の記録をそのまま家族グループに移します。ログインにはパスワードの代わりに<strong>パスキー</strong>（指紋・顔認証）を使います。</p>',
+    invite: `<p class="small">${esc(info.invitedBy || '家族')}さんから「<strong>${esc(info.groupName)}</strong>」に<strong>${ROLE_LABELS[info.role]}</strong>として招待されています。</p>`,
+    link: '<p class="small">この端末にパスキーを作成して、ログインできるようにします。</p>',
+  };
+  return `
+    <h2>${titles[kind]}</h2>
+    ${intro[kind]}
+    <form data-form="account" data-kind="${kind}">
+      ${kind === 'link' ? '' : `<label>あなたの名前（家族に表示されます）
+        <input name="displayName" maxlength="20" required value="${kind === 'create' ? 'ママ' : ''}" placeholder="例: ばあば"></label>`}
+      ${kind === 'create' ? `<label>グループの名前
+        <input name="groupName" maxlength="30" required value="${esc(`${child().name || '赤ちゃん'}の家族`)}"></label>` : ''}
+      ${kind !== 'create' && hasLocalRecords() ? '<p class="alert small">この端末にある記録は、家族グループの記録に置き換わります。必要なら先に設定から「バックアップを保存」してください。</p>' : ''}
+      <p class="muted small" id="account-error" role="alert"></p>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-action="close-dialog">やめる</button>
+        <button class="btn primary">パスキーを作成</button>
+      </div>
+    </form>`;
+}
+
+function showRecoveryCode(code) {
+  openAccount(`
+    <h2>🔑 復旧コード</h2>
+    <p class="small">パスキーの入った端末をすべてなくしたときに使います。<strong>スクリーンショットやメモで大切に保管</strong>してください（あとから表示することはできません）。</p>
+    <p class="recovery-code">${esc(code)}</p>
+    <div class="actions">
+      <button type="button" class="btn ghost" data-action="copy-text" data-text="${esc(code)}">コピー</button>
+      <button type="button" class="btn primary" data-action="close-dialog">保存しました</button>
+    </div>`);
+}
+
+// ログイン・参加の後: この端末のデータを家族グループのデータに置き換えて同期を始める
+async function beginSync(me, { uploadLocal }) {
+  media.setRemote((id, size) => api.fetchMedia(syncEngine.account.groupId, id, size));
+  if (!uploadLocal) {
+    const prefs = { profile: state.profile, checks: state.checks, checkups: state.checkups };
+    state = { ...store.defaultState(), ...prefs, children: [], activeChildId: null };
+    store.save(state);
+    await media.clearFiles().catch(() => {});
+  }
+  familyMembers = null;
+  syncPending = true;
+  updateRoleUi();
+  render();
+  toast('家族グループと同期しています…', 0);
+  await syncEngine.start(me, me.groups[0]?.id, { uploadLocal });
+  syncPending = false;
+  ensureChild();
+  updateRoleUi();
+  render();
+  loadMembers();
+  if (dialogs.settings.open) renderFamilySection();
+  toast(syncEngine.account?.error ? '同期できませんでした。あとで自動的にやり直します' : '同期しました ☁️');
+}
+
+async function submitAccount(form) {
+  const kind = form.dataset.kind;
+  const errEl = form.querySelector('#account-error');
+  const btn = form.querySelector('button.primary');
+  btn.disabled = true;
+  errEl.textContent = '';
+  try {
+    let me;
+    if (kind === 'create') {
+      me = await api.registerPasskey({ type: 'new' }, { displayName: form.displayName.value.trim(), groupName: form.groupName.value.trim() });
+    } else if (kind === 'invite') {
+      me = await api.registerPasskey({ type: 'invite', token: pendingToken }, { displayName: form.displayName.value.trim() });
+    } else {
+      me = await api.registerPasskey({ type: 'link', token: pendingToken });
+    }
+    pendingToken = null;
+    await beginSync(me, { uploadLocal: kind === 'create' });
+    if (me.recoveryCode) showRecoveryCode(me.recoveryCode);
+    else accountDialog.close();
+  } catch (e) {
+    errEl.textContent = errorMessage(e);
+    btn.disabled = false;
+  }
+}
+
+let pendingToken = null;
+
+// #invite=… / #link=… で開かれたとき
+async function handleLanding(hash) {
+  const m = /^#(invite|link)=(.+)$/.exec(hash);
+  if (!m) return false;
+  const [, kind, raw] = m;
+  pendingToken = decodeURIComponent(raw);
+  if (!(await api.available()) || !api.passkeySupported()) {
+    toast('このブラウザでは家族共有を使えません', 4000);
+    return true;
+  }
+  if (account() && !account().error) {
+    toast('すでにログインしています。別のグループに参加するには、いったんログアウトしてください', 5000);
+    return true;
+  }
+  if (kind === 'invite') {
+    try {
+      openAccount(accountForm('invite', await api.inviteInfo(pendingToken)));
+    } catch (e) {
+      openAccount(`<h2>招待リンク</h2><p>${esc(errorMessage(e))}</p>
+        <div class="actions"><button type="button" class="btn primary" data-action="close-dialog">閉じる</button></div>`);
+    }
+  } else {
+    openAccount(accountForm('link'));
+  }
+  return true;
+}
+
+async function shareOrCopy(url, share) {
+  if (share && navigator.share) {
+    try {
+      await navigator.share({ title: 'マタニティ手帳', text: '家族グループへの招待です', url });
+      return;
+    } catch {
+      // キャンセル
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('コピーしました');
+  } catch {
+    toast('コピーできませんでした。長押しして選択してください');
+  }
+}
+
+const FAMILY_ACTIONS = {
+  'account-create': () => openAccount(accountForm('create')),
+  'account-login': async () => {
+    try {
+      const me = await api.loginPasskey();
+      if (!me.groups.length) {
+        toast('参加している家族グループがありません', 4000);
+        await api.logout().catch(() => {});
+        return;
+      }
+      if (hasLocalRecords() && !account()
+        && !confirm('この端末にある記録は、家族グループの記録に置き換わります。よろしいですか？（必要なら先に「バックアップを保存」してください）')) {
+        await api.logout().catch(() => {});
+        return;
+      }
+      if (account() && account().userId === me.user.id) {
+        // 有効期限切れからの再ログイン
+        account().error = null;
+        syncEngine.updateMe(me);
+        await syncEngine.run();
+        updateRoleUi();
+        renderFamilySection();
+        toast('ログインしました');
+        return;
+      }
+      dialogs.settings.close();
+      await beginSync(me, { uploadLocal: false });
+    } catch (e) {
+      toast(errorMessage(e), 4000);
+    }
+  },
+  'account-recover': async () => {
+    const code = document.querySelector('#family-section [name="recoveryCode"]').value;
+    try {
+      const { token } = await api.recover(code);
+      pendingToken = token;
+      dialogs.settings.close();
+      openAccount(accountForm('link'));
+    } catch (e) {
+      toast(errorMessage(e), 4000);
+    }
+  },
+  'account-logout': async () => {
+    if (!confirm('ログアウトしますか？この端末の記録は残りますが、家族との同期は止まります。')) return;
+    await api.logout().catch(() => {});
+    syncEngine.signOut();
+    media.setRemote(null);
+    familyMembers = null;
+    lastLink = null;
+    updateRoleUi();
+    renderFamilySection();
+    render();
+  },
+  'account-delete': async () => {
+    if (!confirm('アカウントを削除します。ほかに家族がいないグループは、記録と写真がすべて削除されます。よろしいですか？')) return;
+    try {
+      await api.deleteMe();
+      syncEngine.signOut();
+      media.setRemote(null);
+      familyMembers = null;
+      updateRoleUi();
+      renderFamilySection();
+      render();
+      toast('退会しました');
+    } catch (e) {
+      toast(errorMessage(e), 5000);
+    }
+  },
+  'account-rename': async () => {
+    const name = prompt('あなたの名前（家族に表示されます）', account().displayName);
+    if (!name?.trim()) return;
+    try {
+      syncEngine.updateMe(await api.updateMe(name.trim()));
+      familyMembers = null;
+      renderFamilySection();
+    } catch (e) {
+      toast(errorMessage(e));
+    }
+  },
+  'sync-now': async () => {
+    await syncEngine.run();
+    toast(account()?.error ? '同期できませんでした' : '同期しました');
+  },
+  invite: async () => {
+    const role = document.querySelector('#family-section [name="inviteRole"]').value;
+    try {
+      const { token } = await api.createInvite(account().groupId, role);
+      lastLink = { label: `招待リンク（${ROLE_LABELS[role]}・7日間有効・1人だけ使えます）`, url: linkUrl('invite', token) };
+      renderFamilySection();
+    } catch (e) {
+      toast(errorMessage(e));
+    }
+  },
+  'device-link': async () => {
+    try {
+      const { token } = await api.deviceLink();
+      lastLink = { label: '別の端末でこのリンクを開いてください（15分間有効）', url: linkUrl('link', token) };
+      renderFamilySection();
+    } catch (e) {
+      toast(errorMessage(e));
+    }
+  },
+  'member-relogin': async (el) => {
+    try {
+      const { token } = await api.reloginLink(account().groupId, el.dataset.uid);
+      lastLink = { label: `${memberName(el.dataset.uid)}さん用の再ログイン用リンク（24時間有効）`, url: linkUrl('link', token) };
+      renderFamilySection();
+    } catch (e) {
+      toast(errorMessage(e));
+    }
+  },
+  'member-remove': async (el) => {
+    if (!confirm(`${memberName(el.dataset.uid)}さんをグループから外しますか？`)) return;
+    try {
+      await api.removeMember(account().groupId, el.dataset.uid);
+      familyMembers = null;
+      renderFamilySection();
+    } catch (e) {
+      toast(errorMessage(e), 5000);
+    }
+  },
+  'group-leave': async () => {
+    if (!confirm('このグループから抜けますか？あなたのママの記録・コメントは削除されます。')) return;
+    try {
+      await api.removeMember(account().groupId, account().userId);
+      syncEngine.signOut();
+      await api.logout().catch(() => {});
+      updateRoleUi();
+      renderFamilySection();
+      render();
+    } catch (e) {
+      toast(errorMessage(e), 5000);
+    }
+  },
+  'recovery-code': async () => {
+    if (!confirm('新しい復旧コードを作ります。前のコードは使えなくなります。')) return;
+    try {
+      const { recoveryCode } = await api.newRecoveryCode();
+      showRecoveryCode(recoveryCode);
+    } catch (e) {
+      toast(errorMessage(e));
+    }
+  },
+  'copy-link': () => shareOrCopy(lastLink.url, false),
+  'share-link': () => shareOrCopy(lastLink.url, true),
+  'copy-text': async (el) => {
+    try {
+      await navigator.clipboard.writeText(el.dataset.text);
+      toast('コピーしました');
+    } catch {
+      toast('コピーできませんでした');
+    }
+  },
+};
+
 // ---------- イベント ----------
 
 document.querySelector('.tabbar').addEventListener('click', (e) => {
@@ -1348,7 +1982,13 @@ const ACTIONS = {
   'close-dialog': (el) => el.closest('dialog')?.close(),
   export: () => exportData(),
   reset: async () => {
-    if (!confirm('すべてのデータ（写真を含む）を削除します。この操作は取り消せません。よろしいですか？')) return;
+    if (account()) {
+      if (!confirm('この端末から記録と写真を消して、ログアウトします。家族グループの記録は消えません。よろしいですか？')) return;
+      await api.logout().catch(() => {});
+      syncEngine.signOut();
+      media.setRemote(null);
+      updateRoleUi();
+    } else if (!confirm('すべてのデータ（写真を含む）を削除します。この操作は取り消せません。よろしいですか？')) return;
     store.clear();
     await media.clearFiles().catch(() => {});
     state = store.defaultState();
@@ -1410,6 +2050,23 @@ const ACTIONS = {
     render();
   },
   'open-photo': (el) => openViewer(el.dataset.id),
+  react: (el) => {
+    toggleReaction(el.dataset.type, el.dataset.target, Number(el.dataset.i));
+    rerenderSocial();
+  },
+  'toggle-comments': (el) => {
+    const id = el.dataset.target;
+    if (ui.openComments.has(id)) ui.openComments.delete(id);
+    else ui.openComments.add(id);
+    rerenderSocial();
+  },
+  'delete-comment': (el) => {
+    if (!confirm('このコメントを削除しますか？')) return;
+    state.comments = state.comments.filter((c) => c.id !== el.dataset.id);
+    persist();
+    rerenderSocial();
+  },
+  ...FAMILY_ACTIONS,
   'viewer-prev': () => {
     if (viewerIndex > 0) {
       viewerIndex -= 1;
@@ -1437,18 +2094,18 @@ const ACTIONS = {
   'toggle-contraction': () => {
     const active = activeContraction();
     if (active) active.end = Date.now();
-    else state.contractions.push({ start: Date.now(), end: null });
+    else state.contractions.push({ id: uuid(), start: Date.now(), end: null });
     persist();
     render();
   },
   'clear-contractions': () => {
     if (!confirm('陣痛の記録をすべて削除しますか？')) return;
-    state.contractions = [];
+    state.contractions = state.contractions.filter((c) => !isMine(c));
     persist();
     render();
   },
   'start-kick': () => {
-    state.kicks.push({ start: Date.now(), end: null, count: 0 });
+    state.kicks.push({ id: uuid(), start: Date.now(), end: null, count: 0 });
     persist();
     render();
   },
@@ -1467,13 +2124,13 @@ const ACTIONS = {
   'finish-kick': () => {
     const k = activeKick();
     if (!k) return;
-    if (k.count === 0) state.kicks.pop();
+    if (k.count === 0) state.kicks = state.kicks.filter((x) => x !== k);
     else k.end = Date.now();
     persist();
     render();
   },
   'delete-weight': (el) => {
-    state.weights = state.weights.filter((w) => w.date !== el.dataset.date);
+    state.weights = state.weights.filter((w) => String(w.id) !== el.dataset.id);
     persist();
     render();
   },
@@ -1504,6 +2161,31 @@ document.addEventListener('change', async (e) => {
     else delete state.checkups[el.dataset.week];
     persist();
     render();
+  } else if (action === 'share-toggle' && account()) {
+    const me = account().userId;
+    const cur = state.shares.find((x) => x.id === me) || { weight: false, journal: false, labor: false };
+    store.upsert(state.shares, { ...cur, id: me, [el.dataset.key]: el.checked });
+    persist();
+    render();
+    toast(el.checked ? '家族に共有しました' : '共有をやめました');
+  } else if (action === 'member-role') {
+    try {
+      await api.setRole(account().groupId, el.dataset.uid, el.value);
+      toast('権限を変更しました');
+    } catch (e) {
+      toast(errorMessage(e), 5000);
+    }
+    familyMembers = null;
+    renderFamilySection();
+  } else if (action === 'switch-group') {
+    if (!confirm('表示するグループを切り替えます。この端末の記録は選んだグループの記録に置き換わります。')) {
+      el.value = account().groupId;
+      return;
+    }
+    const me = { user: { id: account().userId, displayName: account().displayName }, groups: account().groups };
+    const groups = [me.groups.find((g) => g.id === el.value), ...me.groups.filter((g) => g.id !== el.value)];
+    dialogs.settings.close();
+    await beginSync({ ...me, groups }, { uploadLocal: false });
   } else if (action === 'toggle-fetal') {
     ui.withFetal = el.checked;
     render();
@@ -1533,6 +2215,18 @@ document.addEventListener('submit', (e) => {
   e.preventDefault();
   if (busy) return;
   const kind = form.dataset.form;
+  if (kind === 'account') {
+    submitAccount(form);
+    return;
+  }
+  if (kind === 'comment') {
+    const text = form.text.value.trim();
+    if (!text || !account()) return;
+    state.comments.push({ id: uuid(), targetType: form.targetType.value, targetId: form.targetId.value, text, createdAt: Date.now() });
+    persist();
+    rerenderSocial();
+    return;
+  }
   if (kind === 'fetal') {
     saveRecord(form, 'fetalRecords', [['efwG', 0], ['bpdMm', 1], ['flMm', 1], ['acMm', 1], ['crlMm', 1], ['fhrBpm', 0]]);
   } else if (kind === 'growth') {
@@ -1541,15 +2235,18 @@ document.addEventListener('submit', (e) => {
     const date = form.date.value;
     const kg = Number(form.kg.value);
     if (!parseDate(date) || !(kg > 0)) return;
-    state.weights = state.weights.filter((w) => w.date !== date);
-    state.weights.push({ date, kg: Math.round(kg * 10) / 10 });
+    state.weights = state.weights.filter((w) => !(w.date === date && isMine(w)));
+    state.weights.push({ id: uuid(), date, kg: Math.round(kg * 10) / 10 });
     persist();
     render();
     toast('体重を記録しました');
   } else if (kind === 'journal') {
     const text = form.text.value.trim();
     if (!text) return;
-    state.journal.push({ id: Date.now(), date: todayStr(), mood: form.mood.value, text });
+    state.journal.push({
+      id: uuid(), date: todayStr(), mood: form.mood.value, text, createdAt: Date.now(),
+      ...(form.private?.checked ? { private: true } : {}),
+    });
     persist();
     render();
     toast('日記を保存しました');
@@ -1564,8 +2261,35 @@ window.addEventListener('storage', () => {
 
 // ---------- 起動 ----------
 
+accountDialog.addEventListener('close', () => {
+  if (pendingRender && !isEditing()) {
+    pendingRender = false;
+    render();
+  }
+});
+dialogs.milestone.addEventListener('close', () => accountDialog.dispatchEvent(new Event('close')));
+dialogs.viewer.addEventListener('close', () => accountDialog.dispatchEvent(new Event('close')));
+
+ensureChild();
+updateRoleUi();
+
+const landingHash = location.hash; // 招待・端末追加のリンク（タブの切り替えで書き換わる前に読む）
 const initialTab = location.hash.slice(1);
 switchTab(RENDERERS[initialTab] || LEGACY_TABS[initialTab] ? initialTab : 'home');
+
+// 家族共有: 起動時・画面に戻ったとき・オンラインになったとき・1分ごとに同期
+handleLanding(landingHash);
+if (account()) {
+  syncEngine.run();
+  loadMembers();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') syncEngine.run();
+});
+window.addEventListener('online', () => syncEngine.run());
+setInterval(() => {
+  if (document.visibilityState === 'visible') syncEngine.run();
+}, 60 * 1000);
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -4,9 +4,9 @@ import {
   parseDate, formatDate, dueDateFromLmp, lmpFromDueDate, gestationalAge,
   trimesterOf, monthOf, checkupSchedule, nextCheckup, contractionStats,
   formatDuration, weightGainGuide,
-} from '../js/pregnancy.js';
-import { WEEKS, weekInfo } from '../js/data.js';
-import { mergeState, defaultState } from '../js/store.js';
+} from '../public/js/pregnancy.js';
+import { WEEKS, weekInfo } from '../public/js/data.js';
+import { mergeState, defaultState } from '../public/js/store.js';
 
 test('parseDate rejects invalid dates', () => {
   assert.equal(parseDate('2026-02-30'), null);

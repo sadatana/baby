@@ -27,11 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # 公開に必要なファイルだけを _site にまとめる（テストや package.json は含めない）
+      # 画面のファイル（public/）だけを公開する。GitHub Pages では家族共有（API）は使えず、端末内のみで動作する
       - name: Collect site files
         run: |
           mkdir _site
-          cp -r index.html manifest.webmanifest sw.js css js icons _site/
+          cp -r public/. _site/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:

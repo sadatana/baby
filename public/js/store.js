@@ -37,17 +37,23 @@ export function defaultState() {
     milestones: [], // { templateId, title, note, photoIds }
     media: [], // { id, childId, takenAt: 'YYYY-MM-DD', caption, width, height, createdAt, updatedAt }
     deleted: [], // 削除の記録 { type, id, at }（将来の同期で使う）
-    // ママの記録
-    weights: [], // { date: 'YYYY-MM-DD', kg: number }
-    journal: [], // { id, date: 'YYYY-MM-DD', mood, text }
+    // ママの記録（家族共有時は ownerId で記録した人を区別する）
+    weights: [], // { id, date: 'YYYY-MM-DD', kg: number }
+    journal: [], // { id, date: 'YYYY-MM-DD', mood, text, private?, createdAt }
     checks: {}, // チェックリストの完了状態 { key: true }
     checkups: {}, // 健診の受診済み { week: true }
-    contractions: [], // { start: epochMs, end: epochMs|null }
-    kicks: [], // { start: epochMs, end: epochMs|null, count }
+    contractions: [], // { id, start: epochMs, end: epochMs|null }
+    kicks: [], // { id, start: epochMs, end: epochMs|null, count }
+    // 家族共有
+    reactions: [], // { id, targetType, targetId, emoji }
+    comments: [], // { id, targetType, targetId, text, createdAt }
+    shares: [], // ママの記録の共有設定 { id: userId, weight, journal, labor }
   };
 }
 
 const arr = (v) => (Array.isArray(v) ? v : []);
+// 古いデータには id がない記録があるため付ける（同期で記録を区別するため）
+const withIds = (list) => arr(list).filter((r) => r && typeof r === 'object').map((r) => (r.id != null ? r : { ...r, id: newId() }));
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 
 export function mergeState(raw) {
@@ -75,12 +81,15 @@ export function mergeState(raw) {
     milestones: arr(raw.milestones),
     media: arr(raw.media),
     deleted: arr(raw.deleted),
-    weights: arr(raw.weights),
-    journal: arr(raw.journal),
+    weights: withIds(raw.weights),
+    journal: withIds(raw.journal),
     checks: obj(raw.checks),
     checkups: obj(raw.checkups),
-    contractions: arr(raw.contractions),
-    kicks: arr(raw.kicks),
+    contractions: withIds(raw.contractions),
+    kicks: withIds(raw.kicks),
+    reactions: arr(raw.reactions),
+    comments: arr(raw.comments),
+    shares: arr(raw.shares),
   };
 }
 

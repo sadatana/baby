@@ -1,9 +1,12 @@
 # マタニティ手帳
 
-妊娠がわかってから出産、そして赤ちゃんの成長までを記録・サポートする、スマホ向けの Web アプリ（PWA）です。
-ビルド不要・依存ライブラリなしで動作し、データは端末のブラウザ内（記録は localStorage、写真は IndexedDB）にのみ保存されます。
+妊娠がわかってから出産、そして赤ちゃんの成長までを記録し、家族と共有できるスマホ向けの Web アプリ（PWA）です。
 
-要件定義: [docs/requirements.md](docs/requirements.md)（現在はフェーズ 1: 端末内のみで動作）
+- 画面はビルド不要・依存ライブラリなし。記録は端末内（localStorage・写真は IndexedDB）に保存され、オフラインでも使えます。
+- **家族共有**（フェーズ 2）: パスキー（指紋・顔認証）でログインすると、パートナーや両親と記録・写真を共有できます。サーバーは Cloudflare Workers + D1 + R2 です。
+- ログインしなければ、これまでどおり端末内だけで使えます。
+
+要件定義: [docs/requirements.md](docs/requirements.md) ／ 公開手順: [docs/cloudflare-setup.md](docs/cloudflare-setup.md)
 
 ## 主な機能
 
@@ -14,6 +17,20 @@
 | 📷 アルバム | 計測・写真・できごと・日記の時系列タイムライン（妊娠◯週／生後◯ヶ月ごと）、写真一覧と拡大表示、「初めてのできごと」テンプレート |
 | 🤰 ママ | 体重記録とグラフ（妊娠前 BMI による増加の目安つき）、日記、陣痛タイマー、胎動カウンター |
 | ✅ 準備 | 妊婦健診スケジュール、入院準備リスト、妊娠〜出産後の手続きリスト |
+
+### 家族共有
+
+| 権限 | できること |
+| --- | --- |
+| 管理者 | すべての操作、家族の招待・権限変更・削除 |
+| 編集者（パートナーなど） | 赤ちゃんの記録・写真の追加と編集 |
+| 閲覧者（両親・祖父母など） | 見る、リアクション（❤️👏🥰😂）、コメント |
+
+- 設定 →「家族グループを作る」でパスキーを作成し、端末内の記録をそのままグループに移します。
+- 招待リンク（権限付き・7 日間有効・1 回限り）を LINE などで送ると、相手はリンクを開いてパスキーを作るだけで参加できます。
+- ママの体重・日記・陣痛/胎動の記録は、項目ごとに共有するか選べます（初期値は共有しない）。日記は 1 件ずつ「自分だけ」にもできます。
+- 機種変更・2 台目は「別の端末でもログインする」、端末をすべてなくした場合は復旧コードか管理者の「再ログイン用リンク」で戻れます。
+- 同期は、アプリを開いたとき・画面に戻ったとき・1 分ごと・記録したときに行います。オフラインで記録した分は、つながったときに送ります。
 
 設定（右上の ⚙️）から、赤ちゃんの名前・出産予定日（または最終月経の開始日）、誕生の登録（生年月日・性別・出生時の大きさ）、ママの身長・妊娠前の体重を登録できます。
 写真は端末内で自動的に縮小（長辺 2048px）して保存し、撮影日は写真の EXIF 情報から読み取ります。
@@ -26,42 +43,51 @@
   - `scripts/gen-who-percentiles.py` で WHO 公式の LMS 表から月ごとのパーセンタイル値を生成しています
   - 日本の母子健康手帳（乳幼児身体発育調査）の曲線とは少し異なります。同じ形式の表を `js/standards.js` の `INFANT_PERCENTILES` に設定すれば差し替えられます
 
-## 使い方
+## 使い方（開発）
 
 ```bash
-npm start        # http://localhost:8000 で起動（Python の簡易サーバー）
-npm test         # 計算ロジックのテスト（node:test）
+npm run dev      # http://localhost:8787 で起動（Worker を Node.js で実行。D1 の代わりに SQLite を使用）
+npm test         # 計算ロジック・同期・API（パスキー認証を含む）のテスト
 ```
 
-## GitHub Pages で公開
+依存ライブラリはありません（Node.js 22 以上が必要）。
 
-公開 URL: https://sadatana.github.io/baby/
+## 公開
 
-`.github/workflows/pages.yml` により、デフォルトブランチに push するとテスト実行後に自動で公開されます。
-
-初回のみ、リポジトリの **Settings → Pages → Build and deployment → Source** を
-**「GitHub Actions」** に設定してください（設定後、Actions タブから「Deploy to GitHub Pages」を再実行するか、もう一度 push すると公開されます）。
+- **Cloudflare（家族共有あり）**: [docs/cloudflare-setup.md](docs/cloudflare-setup.md) の準備をすると、デフォルトブランチへの push で `.github/workflows/cloudflare.yml` が自動公開します。
+- **GitHub Pages（端末内のみ）**: https://sadatana.github.io/baby/ — `.github/workflows/pages.yml` が `public/` を公開します。家族共有は使えません。
 
 スマホで公開 URL を開き、「ホーム画面に追加」するとアプリとして使えます（オフライン対応）。
 
 ## ファイル構成
 
 ```
-index.html            画面の骨組み
-css/style.css         スタイル（ダークモード対応）
-js/app.js             画面描画とイベント処理
-js/pregnancy.js       週数・予定日・健診・陣痛などの計算ロジック
-js/growth.js          月齢・タイムライン・できごとテンプレート・写真の撮影日（EXIF）
-js/standards.js       成長曲線の標準値と補間
-js/who-percentiles.js WHO 発育基準のパーセンタイル値（自動生成）
-js/charts.js          SVG グラフ
-js/media.js           写真の縮小と IndexedDB への保存
-js/data.js            週ごとの情報、チェックリストなどのコンテンツ
-js/store.js           localStorage への保存（v1 → v2 のデータ移行を含む）
-sw.js                 オフライン用 Service Worker
+public/               画面（静的ファイル）
+  index.html            画面の骨組み
+  css/style.css         スタイル（ダークモード対応）
+  js/app.js             画面描画とイベント処理
+  js/pregnancy.js       週数・予定日・健診・陣痛などの計算ロジック
+  js/growth.js          月齢・タイムライン・できごとテンプレート・写真の撮影日（EXIF）
+  js/standards.js       成長曲線の標準値と補間
+  js/who-percentiles.js WHO 発育基準のパーセンタイル値（自動生成）
+  js/charts.js          SVG グラフ
+  js/media.js           写真の縮小と IndexedDB への保存
+  js/data.js            週ごとの情報、チェックリストなどのコンテンツ
+  js/store.js           端末内への保存（データ移行を含む）
+  js/sync.js            家族共有の同期（差分の検出・送信・反映）
+  js/api.js             サーバー API とパスキーの呼び出し
+  sw.js                 オフライン用 Service Worker
+  _headers              セキュリティ関連の HTTP ヘッダー（Cloudflare）
+worker/               サーバー（Cloudflare Worker）
+  index.js              API（認証・家族グループ・招待・同期・写真）
+  webauthn.js           パスキーの検証（CBOR・署名）
+  util.js               共通処理
+migrations/           データベース（D1）のスキーマ
+dev/                  ローカル開発用サーバーと D1・R2 の代わり
 scripts/              標準値データの生成スクリプト
 tests/                node:test によるテスト
-.github/workflows/    GitHub Pages への自動デプロイ
+wrangler.jsonc        Cloudflare の設定
+.github/workflows/    自動テストと公開
 ```
 
 ## ご注意

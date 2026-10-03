@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WHO Child Growth Standards の LMS 表から、0〜36ヶ月の月ごとのパーセンタイル値を計算して
-js/who-percentiles.js を生成する。
+public/js/who-percentiles.js を生成する。
 
 元データ: npm パッケージ who-growth-standards@1.0.1 に含まれる WHO 公式の LMS 表
 （WHO の expanded tables を転記したもの。パッケージのコードは実行せず、数表だけを読み取る）
@@ -54,7 +54,7 @@ def main(path):
         "// 0〜36ヶ月の月ごとの 3, 10, 25, 50, 75, 90, 97 パーセンタイル値。weight: kg / length: cm / head: cm\n"
         f"export const WHO_PERCENTILES = {json.dumps(out, separators=(',', ':'))};\n"
     )
-    dest = os.path.join(os.path.dirname(__file__), "..", "js", "who-percentiles.js")
+    dest = os.path.join(os.path.dirname(__file__), "..", "public", "js", "who-percentiles.js")
     with open(dest, "w", encoding="utf-8") as f:
         f.write(body)
     print("wrote", os.path.normpath(dest))

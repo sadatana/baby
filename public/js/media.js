@@ -36,6 +36,19 @@ export function getFile(id) {
   return tx('readonly', (s) => s.get(id));
 }
 
+// 写真の一部（full / thumb）だけを保存する（家族の端末から取得した写真のキャッシュ）
+async function putPart(id, size, blob) {
+  const rec = (await getFile(id)) || { id };
+  rec[size] = blob;
+  await tx('readwrite', (s) => s.put(rec));
+}
+
+// 端末にない写真をサーバーから取得する関数（家族共有でログイン中に設定される）
+let remote = null;
+export function setRemote(fn) {
+  remote = fn;
+}
+
 export async function deleteFile(id) {
   revoke(id);
   await tx('readwrite', (s) => s.delete(id));
@@ -59,8 +72,13 @@ export async function fileUrl(id, size = 'thumb') {
   const cached = urlCache.get(id)?.[size];
   if (cached) return cached;
   const rec = await getFile(id);
-  if (!rec?.[size]) return null;
-  const url = URL.createObjectURL(rec[size]);
+  let blob = rec?.[size];
+  if (!blob && remote) {
+    blob = await remote(id, size).catch(() => null);
+    if (blob) await putPart(id, size, blob).catch(() => {});
+  }
+  if (!blob) return null;
+  const url = URL.createObjectURL(blob);
   urlCache.set(id, { ...urlCache.get(id), [size]: url });
   return url;
 }

@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDate } from '../js/pregnancy.js';
+import { parseDate } from '../public/js/pregnancy.js';
 import {
   ageOf, formatAge, periodOf, gestAtBirth, buildTimeline, groupByPeriod, exifDate, MILESTONE_TEMPLATES,
-} from '../js/growth.js';
+} from '../public/js/growth.js';
 import {
   fetalEfwAt, fetalEfwSd, infantPercentilesAt, percentileBand, INFANT_PERCENTILES,
-} from '../js/standards.js';
-import { ticks, niceStep, lineChart } from '../js/charts.js';
-import { mergeState, upsert, remove } from '../js/store.js';
+} from '../public/js/standards.js';
+import { ticks, niceStep, lineChart } from '../public/js/charts.js';
+import { mergeState, upsert, remove } from '../public/js/store.js';
 
 const d = parseDate;
 
