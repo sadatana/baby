@@ -4,9 +4,9 @@ import {
   parseDate, formatDate, dueDateFromLmp, lmpFromDueDate, gestationalAge,
   trimesterOf, monthOf, checkupSchedule, nextCheckup, contractionStats,
   formatDuration, weightGainGuide,
-} from '../js/pregnancy.js';
-import { WEEKS, weekInfo } from '../js/data.js';
-import { mergeState, defaultState } from '../js/store.js';
+} from '../public/js/pregnancy.js';
+import { WEEKS, weekInfo } from '../public/js/data.js';
+import { mergeState, defaultState } from '../public/js/store.js';
 
 test('parseDate rejects invalid dates', () => {
   assert.equal(parseDate('2026-02-30'), null);
@@ -105,9 +105,12 @@ test('weekly content exists for weeks 4-41', () => {
 });
 
 test('mergeState fills missing fields', () => {
-  const s = mergeState({ profile: { dueDate: '2026-10-08' }, weights: 'bad' });
-  assert.equal(s.profile.dueDate, '2026-10-08');
-  assert.equal(s.profile.babyName, '');
+  const s = mergeState({ profile: { dueDate: '2026-10-08', heightCm: 160 }, weights: 'bad' });
+  assert.equal(s.children[0].dueDate, '2026-10-08');
+  assert.equal(s.profile.heightCm, 160);
   assert.deepEqual(s.weights, []);
-  assert.deepEqual(mergeState(null), defaultState());
+  const empty = mergeState(null);
+  const def = defaultState();
+  assert.equal(empty.children.length, 1);
+  assert.deepEqual(Object.keys(empty).sort(), Object.keys(def).sort());
 });

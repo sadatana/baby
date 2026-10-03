@@ -1,11 +1,12 @@
 {
   "name": "maternity-app",
-  "version": "1.0.0",
-  "description": "妊娠から出産までをサポートするマタニティ手帳アプリ（PWA）",
+  "version": "2.0.0",
+  "description": "妊娠から赤ちゃんの成長までを記録・家族と共有できるマタニティ手帳アプリ（PWA + Cloudflare Workers）",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "python3 -m http.server 8000",
-    "test": "node --test tests/*.test.js"
+    "dev": "node --no-warnings dev/server.js",
+    "start": "npm run dev",
+    "test": "node --no-warnings --test tests/*.test.js"
   }
 }
