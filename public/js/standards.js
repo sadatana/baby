@@ -4,7 +4,7 @@ import { WHO_PERCENTILES } from './who-percentiles.js';
 
 // ---------- 胎児の推定体重（EFW） ----------
 // 出典: 日本産科婦人科学会「胎児体重の妊娠週数ごとの基準値」（日本超音波医学会 2003 年の基準に基づく）
-// [妊娠週数, -2.0SD, 平均, +2.0SD]（g）
+// [妊娠週数, -2.0SD, 平均, +2.0SD]（g）。照合の記録と新基準（JSUM2025）については docs/reference-values.md
 export const FETAL_EFW_SOURCE = '日本産科婦人科学会「胎児体重の妊娠週数ごとの基準値」';
 const FETAL_EFW_TABLE = [
   [18, 126, 187, 247],

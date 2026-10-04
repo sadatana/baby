@@ -1,5 +1,5 @@
 // オフラインでも使えるようにアプリ本体をキャッシュする
-const CACHE = 'maternity-app-v4';
+const CACHE = 'sukusuku-v5';
 const ASSETS = [
   './',
   'index.html',
@@ -15,6 +15,7 @@ const ASSETS = [
   'js/media.js',
   'js/api.js',
   'js/sync.js',
+  'js/icons.js',
   'manifest.webmanifest',
   'icons/icon.svg',
 ];

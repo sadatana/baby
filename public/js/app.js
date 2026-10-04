@@ -17,6 +17,7 @@ import * as store from './store.js';
 import * as media from './media.js';
 import * as api from './api.js';
 import { createSyncEngine } from './sync.js';
+import { icon, moodIcon, moodLevel, MOOD_LABELS, hydrateIcons } from './icons.js';
 
 let state = store.load();
 let currentTab = 'home';
@@ -99,7 +100,8 @@ function updateSyncStatus(st) {
   if (!a) return;
   const status = st || {};
   const error = a.error;
-  el.textContent = error === 'signed_out' || error === 'removed' ? '⚠️' : status.syncing ? '🔄' : error ? '☁️⚠' : '☁️';
+  el.innerHTML = icon(error === 'signed_out' || error === 'removed' ? 'alert' : status.syncing ? 'sync' : error ? 'cloudOff' : 'cloud', status.syncing ? 'spin' : '');
+  el.classList.toggle('warn', !!error);
   el.title = error === 'offline' ? 'オフライン（つながったら同期します）'
     : error ? '同期できませんでした' : status.syncing ? '同期中…' : `同期済み${a.lastSyncAt ? `（${new Date(a.lastSyncAt).toLocaleTimeString('ja-JP')}）` : ''}`;
   const info = document.getElementById('sync-info');
@@ -256,7 +258,7 @@ function renderHome() {
   if (!due) {
     return `
       <section class="card welcome">
-        <div class="big-emoji">🤰</div>
+        <div class="welcome-mark">${icon('baby')}</div>
         <h2>ご妊娠おめでとうございます</h2>
         <p>出産予定日（または最終月経の開始日）を設定すると、妊娠週数や赤ちゃんの成長、健診スケジュールを確認できます。</p>
         <button class="btn primary" data-action="open-settings">予定日を設定する</button>
@@ -275,7 +277,7 @@ function renderHome() {
   let headline;
   if (ga.notStarted) headline = '予定日の設定を確認してください';
   else if (ga.daysLeft > 0) headline = `${babyLabel()}に会えるまで あと <strong>${ga.daysLeft}</strong> 日`;
-  else if (ga.daysLeft === 0) headline = '今日が出産予定日です 🎉';
+  else if (ga.daysLeft === 0) headline = '今日が出産予定日です';
   else headline = `予定日から ${-ga.daysLeft} 日経過`;
 
   return `
@@ -293,13 +295,13 @@ function renderHome() {
     ${ga.week >= 34 ? `
     <section class="card born-card edit-only">
       <p>${babyLabel()}が生まれたら、誕生を登録しましょう。月齢の表示や発育曲線に切り替わります。</p>
-      <button class="btn primary" data-action="open-birth">🎉 誕生を登録する</button>
+      <button class="btn primary" data-action="open-birth">誕生を登録する</button>
     </section>` : ''}
 
     ${renderQuickActions()}
 
     <section class="card baby-size" data-action="goto-week" data-week="${info.week}">
-      <div class="size-emoji">${info.emoji}</div>
+      ${sizeVisual(info.week)}
       <div>
         <p class="muted small">今週の${babyLabel()}は</p>
         <p class="size-name">${esc(info.size)}くらい</p>
@@ -309,19 +311,19 @@ function renderHome() {
 
     ${lastFetal ? `
     <section class="card link-card" data-action="goto-tab" data-tab="growth">
-      <h3>📏 前回の健診の記録</h3>
+      <h3>${icon('ruler')}前回の健診の記録</h3>
       <p>${esc(lastFetal.date)}（${esc(periodLabel(lastFetal.date))}）
         ${lastFetal.efwG ? `推定体重 <strong>${esc(lastFetal.efwG)}g</strong>` : ''}</p>
     </section>` : ''}
 
     <section class="card">
-      <h3>💡 今週のポイント</h3>
+      <h3>${icon('lightbulb')}今週のポイント</h3>
       <p>${esc(info.tip)}</p>
     </section>
 
     ${next ? `
     <section class="card">
-      <h3>🏥 次の妊婦健診（目安）</h3>
+      <h3>${icon('hospital')}次の妊婦健診（目安）</h3>
       <p><strong>${formatDateJa(next.date)}</strong>（${next.week}週）</p>
       <p class="muted small">${diffDays(next.date, t) === 0 ? '今日です' : `あと${diffDays(next.date, t)}日`}・実際の日程は産院の指示に従ってください</p>
     </section>` : ''}
@@ -355,14 +357,14 @@ function renderBabyHome() {
 
     ${latest ? `
     <section class="card link-card" data-action="goto-tab" data-tab="growth">
-      <h3>📏 最新の計測</h3>
+      <h3>${icon('ruler')}最新の計測</h3>
       <p>${esc(latest.date)}（${esc(periodLabel(latest.date))}）</p>
       <p>${growthValues(latest)}</p>
     </section>` : ''}
 
     ${events.length ? `
     <section class="card">
-      <h3>📅 これからの行事</h3>
+      <h3>${icon('calendar')}これからの行事</h3>
       <ul class="plain">
         ${events.map((e) => `<li>${esc(e.label)}: <strong>${formatDateJa(e.date)}</strong>
           <span class="muted small">${diffDays(e.date, t) === 0 ? '今日！' : `あと${diffDays(e.date, t)}日`}</span></li>`).join('')}
@@ -371,9 +373,9 @@ function renderBabyHome() {
 
     ${nextTemplates.length ? `
     <section class="card">
-      <h3>🌱 これからの「初めて」</h3>
+      <h3>${icon('star')}これからの「初めて」</h3>
       <ul class="plain">
-        ${nextTemplates.map((m) => `<li>${m.emoji} ${esc(m.title)} <span class="muted small">${esc(m.hint)}</span>
+        ${nextTemplates.map((m) => `<li><span class="li-icon">${icon(m.icon)}</span>${esc(m.title)} <span class="muted small">${esc(m.hint)}</span>
           <button class="btn ghost tiny edit-only" data-action="new-milestone" data-template="${m.id}">記録</button></li>`).join('')}
       </ul>
       <p class="muted small">時期は一般的な目安です。発達には個人差があります。</p>
@@ -383,18 +385,25 @@ function renderBabyHome() {
 function renderQuickActions() {
   return `
     <section class="quick edit-only">
-      <label class="quick-btn">📷<span>写真を追加</span>
+      <label class="quick-btn">${icon('camera')}<span>写真を追加</span>
         <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
       </label>
-      <button class="quick-btn" data-action="goto-tab" data-tab="growth"><span class="q-emoji">📏</span><span>${isBorn(child()) ? '身長・体重' : '健診の記録'}</span></button>
-      <button class="quick-btn" data-action="new-milestone"><span class="q-emoji">🌟</span><span>できごと</span></button>
+      <button class="quick-btn" data-action="goto-tab" data-tab="growth">${icon('ruler')}<span>${isBorn(child()) ? '身長・体重' : '健診の記録'}</span></button>
+      <button class="quick-btn" data-action="new-milestone">${icon('star')}<span>できごと</span></button>
     </section>`;
+}
+
+// 赤ちゃんの大きさを円の大きさで表す（4週〜41週）
+function sizeVisual(week) {
+  const t = Math.max(0, Math.min(1, (week - 4) / 37));
+  const d = Math.round(14 + 58 * Math.sqrt(t));
+  return `<div class="size-visual" aria-hidden="true"><span style="width:${d}px;height:${d}px"></span></div>`;
 }
 
 function renderWarningCard() {
   return `
     <section class="card warning">
-      <h3>⚠️ すぐに産院へ連絡するサイン</h3>
+      <h3>${icon('alert')}すぐに産院へ連絡するサイン</h3>
       <ul>${WARNING_SIGNS.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>
       <p class="muted small">迷ったときは、ためらわずにかかりつけの産院へ電話してください。</p>
     </section>`;
@@ -403,7 +412,7 @@ function renderWarningCard() {
 // ---------- 成長 ----------
 
 function renderGrowth() {
-  const head = segmented('growthView', ui.growthView, [['records', '📏 成長の記録'], ['guide', '📖 週ごとのガイド']]);
+  const head = segmented('growthView', ui.growthView, [['records', '成長の記録'], ['guide', '週ごとのガイド']]);
   if (ui.growthView === 'guide') return head + renderWeeks();
   // 出生後でも、妊娠中の記録を編集するときは健診の記録フォームを表示する
   const fetalForm = !isBorn(child()) || ui.editing?.type === 'fetalRecords';
@@ -439,7 +448,7 @@ function renderFetal() {
   const records = mine(state.fetalRecords).sort(byDateDesc);
   return `
     <section class="card edit-only">
-      <h2>${rec.id ? '✏️ 健診の記録を編集' : '📏 健診の記録'}</h2>
+      <h2>${icon(rec.id ? 'edit' : 'ruler')}${rec.id ? '健診の記録を編集' : '健診の記録'}</h2>
       <p class="muted small">エコーで測った値を、わかる項目だけ入力してください。</p>
       <form data-form="fetal" class="record-form">
         <input type="hidden" name="id" value="${esc(rec.id || '')}">
@@ -477,8 +486,8 @@ function recordItem(type, r, valuesHtml) {
     <div class="record-head">
       <span>${esc(r.date)} <span class="muted">${esc(periodLabel(r.date))}</span></span>
       <span class="edit-only">
-        <button class="icon-btn small" data-action="edit-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="編集">✏️</button>
-        <button class="icon-btn small" data-action="delete-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="削除">✕</button>
+        <button class="icon-btn small" data-action="edit-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="編集">${icon('edit')}</button>
+        <button class="icon-btn small" data-action="delete-record" data-type="${type}" data-id="${esc(r.id)}" aria-label="削除">${icon('trash')}</button>
       </span>
     </div>
     <div class="vals">${valuesHtml}</div>
@@ -497,7 +506,7 @@ function renderFetalChart(due, records) {
   const metricChips = available.length > 1
     ? chips('fetalMetric', key, available.map(([k, l]) => [k, l.split(' ')[0]])) : '';
   if (!pts.length) {
-    return available.length ? `<section class="card"><h2>📈 グラフ</h2>${metricChips}</section>` : '';
+    return available.length ? `<section class="card"><h2>${icon('growth')}グラフ</h2>${metricChips}</section>` : '';
   }
 
   const isEfw = key === 'efwG';
@@ -525,7 +534,7 @@ function renderFetalChart(due, records) {
 
   return `
     <section class="card">
-      <h2>📈 ${esc(label.split(' ')[0])}の変化</h2>
+      <h2>${icon('growth')}${esc(label.split(' ')[0])}の変化</h2>
       ${metricChips}
       ${lineChart({
         label: `${label}の推移`,
@@ -574,7 +583,7 @@ function renderInfant() {
   return `
     <section class="card">
       <div class="record-head">
-        <h2>🎉 生まれたとき</h2>
+        <h2>${icon('baby')}生まれたとき</h2>
         <button class="btn ghost tiny edit-only" data-action="open-birth">編集</button>
       </div>
       <p>${formatDateJa(parseDate(c.birthDate))}${gest ? `（在胎${gest.week}週${gest.day}日）` : ''}
@@ -583,7 +592,7 @@ function renderInfant() {
     </section>
 
     <section class="card edit-only">
-      <h2>${rec.id ? '✏️ 計測を編集' : '📏 身長・体重の記録'}</h2>
+      <h2>${icon(rec.id ? 'edit' : 'ruler')}${rec.id ? '計測を編集' : '身長・体重の記録'}</h2>
       <form data-form="growth" class="record-form">
         <input type="hidden" name="id" value="${esc(rec.id || '')}">
         <label>測った日<input type="date" name="date" value="${esc(rec.date || todayStr())}" required></label>
@@ -614,7 +623,7 @@ function renderInfant() {
     ${fetal.length ? `
     <section class="card">
       <details>
-        <summary><h2>🤰 妊娠中の記録 <span class="count">${fetal.length}件</span></h2></summary>
+        <summary><h2>${icon('mom')}妊娠中の記録 <span class="count">${fetal.length}件</span></h2></summary>
         <ul class="records">${fetal.map((r) => recordItem('fetalRecords', r, fetalValues(r))).join('')}</ul>
       </details>
     </section>` : ''}`;
@@ -638,7 +647,7 @@ function renderInfantChart(c, records, fetal) {
   const fetalToggle = key === 'weight' && fetal.some((r) => r.efwG != null)
     ? `<label class="toggle"><input type="checkbox" data-action="toggle-fetal" ${ui.withFetal ? 'checked' : ''}> 妊娠中の推定体重も表示</label>` : '';
   if (!pts.length && !fetalPts.length) {
-    return `<section class="card"><h2>📈 発育曲線</h2>${metricChips}<p class="muted">記録するとグラフが表示されます。</p></section>`;
+    return `<section class="card"><h2>${icon('growth')}発育曲線</h2>${metricChips}<p class="muted">記録するとグラフが表示されます。</p></section>`;
   }
 
   const allX = [...pts, ...fetalPts].map((p) => p[0]);
@@ -667,7 +676,7 @@ function renderInfantChart(c, records, fetal) {
 
   return `
     <section class="card">
-      <h2>📈 発育曲線</h2>
+      <h2>${icon('growth')}発育曲線</h2>
       ${metricChips}
       ${fetalToggle}
       ${lineChart({
@@ -715,30 +724,30 @@ function renderWeeks() {
     </section>
     <section class="card week-detail">
       <div class="week-head">
-        <button class="icon-btn" data-action="select-week" data-week="${Math.max(4, w - 1)}" aria-label="前の週">◀</button>
+        <button class="icon-btn" data-action="select-week" data-week="${Math.max(4, w - 1)}" aria-label="前の週">${icon('chevronLeft')}</button>
         <div>
           <p class="week-title">妊娠${w}週</p>
           ${range ? `<p class="muted small">${range}</p>` : ''}
         </div>
-        <button class="icon-btn" data-action="select-week" data-week="${Math.min(41, w + 1)}" aria-label="次の週">▶</button>
+        <button class="icon-btn" data-action="select-week" data-week="${Math.min(41, w + 1)}" aria-label="次の週">${icon('chevronRight')}</button>
       </div>
       <div class="baby-size inline">
-        <div class="size-emoji">${info.emoji}</div>
+        ${sizeVisual(info.week)}
         <div>
           <p class="size-name">${esc(info.size)}くらい</p>
           <p class="small">身長 ${info.length} ／ 体重 ${info.weight}</p>
         </div>
       </div>
-      <h3>👶 赤ちゃんの様子</h3>
+      <h3>${icon('baby')}赤ちゃんの様子</h3>
       <p>${esc(info.baby)}</p>
-      <h3>🤰 ママの様子</h3>
+      <h3>${icon('mom')}ママの様子</h3>
       <p>${esc(info.mom)}</p>
-      <h3>💡 ポイント</h3>
+      <h3>${icon('lightbulb')}ポイント</h3>
       <p>${esc(info.tip)}</p>
       <p class="muted small">※大きさ・体重は一般的な目安です。個人差があります。</p>
     </section>
     <section class="card">
-      <h3>🍽️ 食べ物の注意点</h3>
+      <h3>${icon('food')}食べ物の注意点</h3>
       <ul class="food">
         ${FOOD_NOTES.map((f) => `<li class="food-${f.level}"><strong>${esc(f.title)}</strong><span>${esc(f.text)}</span></li>`).join('')}
       </ul>
@@ -751,10 +760,10 @@ function renderAlbum() {
   const head = segmented('albumView', ui.albumView, [['timeline', 'タイムライン'], ['photos', '写真'], ['milestones', 'できごと']]);
   const add = `
     <div class="album-actions edit-only">
-      <label class="btn primary file-btn">📷 写真を追加
+      <label class="btn primary file-btn">${icon('camera')}写真を追加
         <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
       </label>
-      <button class="btn ghost" data-action="new-milestone">🌟 できごと</button>
+      <button class="btn ghost" data-action="new-milestone">${icon('star')}できごと</button>
     </div>`;
   const body = { timeline: renderTimeline, photos: renderPhotos, milestones: renderMilestones }[ui.albumView]();
   return head + add + body;
@@ -778,7 +787,7 @@ function renderTimeline() {
       <p class="muted">まだ記録がありません。健診の記録や写真、できごとを追加すると、ここに時系列で表示されます。</p></section>`;
   }
   return `
-    <section class="card">${filterChips}</section>
+    ${filterChips}
     ${groups.map((g) => `
       <section class="tl-group">
         <h3 class="tl-head">${esc(g.label)}</h3>
@@ -790,31 +799,31 @@ function timelineItem(item) {
   const date = `<span class="tl-date">${esc(item.date)}</span>`;
   switch (item.kind) {
     case 'fetal':
-      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">📏 健診の記録</p>
+      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">${icon('ruler')}健診の記録</p>
         <div class="vals">${fetalValues(item.record)}</div>
         ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}
         ${socialBar('fetal', item.record.id)}</li>`;
     case 'growth':
-      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">📏 計測</p>
+      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">${icon('ruler')}計測</p>
         <div class="vals">${growthValues(item.record)}</div>
         ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}
         ${socialBar('growth', item.record.id)}</li>`;
     case 'birth':
-      return `<li class="tl tl-birth">${date}<p class="tl-title">🎉 ${babyLabel()}誕生！</p>
+      return `<li class="tl tl-birth">${date}<p class="tl-title">${icon('gift')}${babyLabel()}誕生</p>
         <div class="vals">${birthValues(item.record)}</div>${socialBar('birth', `birth:${item.record.id}`)}</li>`;
     case 'milestone': {
       const t = milestoneTemplate(item.record.templateId);
       return `<li class="tl tl-milestone">${date}
-        <p class="tl-title">${t ? t.emoji : '🌟'} ${esc(item.record.title)}
-          <button class="icon-btn small" data-action="edit-milestone" data-id="${esc(item.record.id)}" aria-label="開く">✏️</button></p>
+        <p class="tl-title">${icon(t ? t.icon : 'star')}${esc(item.record.title)}
+          <button class="icon-btn small" data-action="edit-milestone" data-id="${esc(item.record.id)}" aria-label="開く">${icon('chevronRight')}</button></p>
         ${item.record.note ? `<p class="note">${esc(item.record.note).replace(/\n/g, '<br>')}</p>` : ''}${photoStrip(item.record.photoIds)}
         ${socialBar('milestone', item.record.id)}</li>`;
     }
     case 'photos':
-      return `<li class="tl tl-photo">${date}<p class="tl-title">📷 写真 ${item.media.length}枚</p>
+      return `<li class="tl tl-photo">${date}<p class="tl-title">${icon('camera')}写真 ${item.media.length}枚</p>
         <div class="photo-strip">${item.media.map((m) => photoThumb(m.id)).join('')}</div></li>`;
     case 'journal':
-      return `<li class="tl tl-journal">${date}${isMine(item.record) ? '' : byline(item.record, true)}<p class="tl-title">${esc(item.record.mood)} 日記${item.record.private ? ' 🔒' : ''}</p>
+      return `<li class="tl tl-journal">${date}${isMine(item.record) ? '' : byline(item.record, true)}<p class="tl-title">${moodIcon(moodLevel(item.record.mood))}日記${item.record.private ? icon('lock', 'inline') : ''}</p>
         <p class="note">${esc(item.record.text).replace(/\n/g, '<br>')}</p>${socialBar('journal', String(item.record.id))}</li>`;
     default:
       return '';
@@ -830,7 +839,9 @@ function byline(r, owner = false) {
 
 // ---------- リアクション・コメント ----------
 
-const REACTIONS = ['❤️', '👏', '🥰', '😂'];
+// リアクション（id の末尾の番号で種類を区別する）
+const REACTIONS = [['heart', '大好き'], ['thumbsUp', 'いいね'], ['sparkle', 'すごい'], ['smile', 'かわいい']];
+const reactionIndex = (r) => Number(String(r.id).split('.').pop());
 
 function socialBar(targetType, targetId) {
   if (!account() || targetId == null) return '';
@@ -840,17 +851,17 @@ function socialBar(targetType, targetId) {
   const open = ui.openComments.has(targetId);
   return `<div class="social">
     <div class="social-row">
-      ${REACTIONS.map((emoji, i) => {
-        const who = reactions.filter((r) => r.emoji === emoji);
+      ${REACTIONS.map(([name, label], i) => {
+        const who = reactions.filter((r) => reactionIndex(r) === i);
         const mine = who.some((r) => r.id === `${me}.${targetId}.${i}`);
         return `<button class="react ${mine ? 'mine' : ''}" aria-pressed="${mine}" data-action="react" data-type="${targetType}"
-          data-target="${esc(targetId)}" data-i="${i}" title="${esc(who.map((r) => memberName(r.ownerId || me)).join('、'))}">${emoji}${who.length ? `<span>${who.length}</span>` : ''}</button>`;
+          data-target="${esc(targetId)}" data-i="${i}" aria-label="${label}" title="${esc([label, ...who.map((r) => memberName(r.ownerId || me))].join('：'))}">${icon(name)}${who.length ? `<span>${who.length}</span>` : ''}</button>`;
       }).join('')}
-      <button class="react comment-toggle" data-action="toggle-comments" data-target="${esc(targetId)}" aria-expanded="${open}">💬${comments.length ? `<span>${comments.length}</span>` : ''}</button>
+      <button class="react comment-toggle" data-action="toggle-comments" data-target="${esc(targetId)}" aria-expanded="${open}" aria-label="コメント">${icon('comment')}${comments.length ? `<span>${comments.length}</span>` : ''}</button>
     </div>
     ${open ? `<div class="comments">
       ${comments.map((c) => `<p class="comment"><strong>${esc(memberName(c.ownerId || me))}</strong> ${esc(c.text)}
-        ${isMine(c) || isAdmin() ? `<button class="icon-btn small" data-action="delete-comment" data-id="${esc(c.id)}" aria-label="コメントを削除">✕</button>` : ''}</p>`).join('')}
+        ${isMine(c) || isAdmin() ? `<button class="icon-btn small" data-action="delete-comment" data-id="${esc(c.id)}" aria-label="コメントを削除">${icon('close')}</button>` : ''}</p>`).join('')}
       <form data-form="comment" class="comment-form">
         <input type="hidden" name="targetType" value="${targetType}">
         <input type="hidden" name="targetId" value="${esc(targetId)}">
@@ -865,7 +876,7 @@ function toggleReaction(targetType, targetId, i) {
   const id = `${account().userId}.${targetId}.${i}`;
   const idx = state.reactions.findIndex((r) => r.id === id);
   if (idx >= 0) state.reactions.splice(idx, 1);
-  else state.reactions.push({ id, targetType, targetId, emoji: REACTIONS[i], createdAt: Date.now() });
+  else state.reactions.push({ id, targetType, targetId, emoji: REACTIONS[i][0], createdAt: Date.now() });
   persist();
 }
 
@@ -902,7 +913,7 @@ function renderMilestones() {
         ${MILESTONE_TEMPLATES.filter((t) => t.phase === phase).map((t) => {
           const r = byTemplate.get(t.id);
           return `<li class="${r ? 'done' : ''}">
-            <span class="ms-emoji">${t.emoji}</span>
+            <span class="ms-mark">${icon(r ? 'checkCircle' : t.icon)}</span>
             <span class="ms-body"><strong>${esc(t.title)}</strong>
               <small class="muted">${r ? `${esc(r.date)}（${esc(periodLabel(r.date))}）` : esc(t.hint)}</small></span>
             ${r ? `<button class="btn ghost tiny" data-action="edit-milestone" data-id="${esc(r.id)}">見る</button>`
@@ -913,17 +924,17 @@ function renderMilestones() {
     </section>`;
   const born = isBorn(child());
   return `
-    ${born ? section('baby', '👶 生まれてから') : section('pregnancy', '🤰 妊娠中')}
+    ${born ? section('baby', '生まれてから') : section('pregnancy', '妊娠中')}
     ${custom.length ? `
     <section class="card">
-      <h2>✍️ そのほかの「初めて」</h2>
+      <h2>そのほかの「初めて」</h2>
       <ul class="milestones">${custom.map((r) => `<li class="done">
-        <span class="ms-emoji">🌟</span>
+        <span class="ms-mark">${icon('checkCircle')}</span>
         <span class="ms-body"><strong>${esc(r.title)}</strong><small class="muted">${esc(r.date)}（${esc(periodLabel(r.date))}）</small></span>
         <button class="btn ghost tiny" data-action="edit-milestone" data-id="${esc(r.id)}">見る</button></li>`).join('')}
       </ul>
     </section>` : ''}
-    ${born ? section('pregnancy', '🤰 妊娠中') : section('baby', '👶 生まれてから（これから）')}
+    ${born ? section('pregnancy', '妊娠中') : section('baby', '生まれてから（これから）')}
     <p class="muted small center">時期は一般的な目安です。発達には個人差があります。</p>`;
 }
 
@@ -951,7 +962,7 @@ const momList = (coll, owner = currentMomOwner()) => state[coll].filter((r) => o
 function renderMom() {
   const owner = currentMomOwner();
   const others = momOwners();
-  const head = segmented('momView', ui.momView, [['records', '⚖️ 体重・日記'], ['tools', '⏱️ 陣痛・胎動']]);
+  const head = segmented('momView', ui.momView, [['records', '体重・日記'], ['tools', '陣痛・胎動']]);
   const ownerChips = others.length
     ? chips('momOwner', owner, [...(canEdit() ? [['me', '自分']] : []), ...others.map((uid) => [uid, memberName(uid)])]) : '';
   if (!canEdit() && !others.length) {
@@ -970,7 +981,7 @@ function renderShareCard() {
   return `
     <section class="card share-card">
       <details>
-        <summary><h2>👪 家族への共有 <span class="count">${['weight', 'journal', 'labor'].filter((k) => share[k]).length}/3</span></h2></summary>
+        <summary><h2>${icon('users')}家族への共有 <span class="count">${['weight', 'journal', 'labor'].filter((k) => share[k]).length}/3</span></h2></summary>
         <p class="muted small">オンにした記録だけ、家族グループのメンバーが見られます。</p>
         ${item('weight', '体重')}
         ${item('journal', '日記（「自分だけ」にした日記は共有されません）')}
@@ -1009,7 +1020,7 @@ function renderTools(readOnly) {
 
   return `
     <section class="card">
-      <h2>⏱️ 陣痛タイマー</h2>
+      <h2>${icon('timer')}陣痛タイマー</h2>
       ${readOnly ? (active ? '<p class="alert">いま陣痛を計測中です</p>' : '') : `
       <p class="muted small">痛みが始まったら「開始」、おさまったら「終了」をタップ。間隔（開始〜次の開始）と持続時間を記録します。</p>
       <button class="big-btn ${active ? 'stop' : ''}" data-action="toggle-contraction">
@@ -1038,11 +1049,11 @@ function renderTools(readOnly) {
     </section>
 
     <section class="card">
-      <h2>👣 胎動カウンター</h2>
+      <h2>${icon('footprints')}胎動カウンター</h2>
       ${readOnly ? (kick ? `<p>カウント中: <strong>${esc(kick.count)}</strong> / 10</p>` : '') : `
       <p class="muted small">赤ちゃんが動いたらタップ。10回動くまでの時間を測ります（目安として妊娠28週ごろから）。</p>
       ${kick ? `
-        <button class="big-btn kick" data-action="kick">👣 動いた！ <strong>${esc(kick.count)}</strong> / 10</button>
+        <button class="big-btn kick" data-action="kick">動いた <strong>${esc(kick.count)}</strong> / 10</button>
         <p class="live">経過時間 <strong data-live-since="${kick.start}">0秒</strong></p>
         <button class="btn ghost small" data-action="finish-kick">カウントを終了</button>
       ` : '<button class="big-btn" data-action="start-kick">カウントを始める</button>'}`}
@@ -1083,7 +1094,6 @@ function renderWeightChart(due, weights, pre) {
   });
 }
 
-const MOODS = ['😊', '😌', '😐', '😣', '😢'];
 
 function renderRecords(readOnly) {
   const due = dueDate();
@@ -1097,7 +1107,7 @@ function renderRecords(readOnly) {
 
   return `
     <section class="card">
-      <h2>⚖️ 体重記録</h2>
+      <h2>${icon('scale')}体重記録</h2>
       ${readOnly ? '' : `
       <form class="inline-form" data-form="weight">
         <input type="date" name="date" value="${todayStr()}" required>
@@ -1115,28 +1125,28 @@ function renderRecords(readOnly) {
         ${weights.slice(0, 8).map((w) => `<li>
           <span>${esc(w.date)}${due ? `（${gestationalAge(due, parseDate(w.date)).week}週）` : ''}</span>
           <strong>${esc(w.kg)}kg</strong>
-          ${readOnly ? '' : `<button class="icon-btn small" data-action="delete-weight" data-id="${esc(w.id)}" aria-label="削除">✕</button>`}
+          ${readOnly ? '' : `<button class="icon-btn small" data-action="delete-weight" data-id="${esc(w.id)}" aria-label="削除">${icon('trash')}</button>`}
         </li>`).join('')}
       </ul>` : (readOnly ? '<p class="muted small">共有された体重の記録はありません。</p>' : '')}
     </section>
 
     <section class="card">
-      <h2>📔 日記</h2>
+      <h2>${icon('book')}日記</h2>
       ${readOnly ? '' : `
       <form data-form="journal" class="journal-form">
         <div class="moods">
-          ${MOODS.map((m, i) => `<label><input type="radio" name="mood" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}
+          ${MOOD_LABELS.map((label, i) => `<label title="${label}"><input type="radio" name="mood" value="${i}" ${i === 1 ? 'checked' : ''} aria-label="${label}"><span>${moodIcon(i)}</span></label>`).join('')}
         </div>
         <textarea name="text" rows="3" maxlength="1000" placeholder="体調、健診で言われたこと、${babyLabel()}へのメッセージなど" required></textarea>
-        ${account() ? '<label class="toggle"><input type="checkbox" name="private"> 🔒 自分だけ（家族には見せない）</label>' : ''}
+        ${account() ? '<label class="toggle"><input type="checkbox" name="private"> 自分だけ（家族には見せない）</label>' : ''}
         <button class="btn primary">保存</button>
       </form>`}
       ${journal.length ? `
       <ul class="journal">
         ${journal.map((j) => `<li>
           <div class="journal-head">
-            <span>${esc(j.mood)} ${esc(j.date)}・${esc(periodLabel(j.date))}${j.private ? ' 🔒' : ''}</span>
-            ${readOnly ? '' : `<button class="icon-btn small" data-action="delete-journal" data-id="${esc(j.id)}" aria-label="削除">✕</button>`}
+            <span class="journal-meta">${moodIcon(moodLevel(j.mood), 'mood')}${esc(j.date)}・${esc(periodLabel(j.date))}${j.private ? icon('lock', 'inline') : ''}</span>
+            ${readOnly ? '' : `<button class="icon-btn small" data-action="delete-journal" data-id="${esc(j.id)}" aria-label="削除">${icon('trash')}</button>`}
           </div>
           <p>${esc(j.text).replace(/\n/g, '<br>')}</p>
           ${socialBar('journal', String(j.id))}
@@ -1170,7 +1180,7 @@ function renderLists() {
   return `
     <section class="card">
       <details ${isBorn(child()) ? '' : 'open'}>
-        <summary><h2>🏥 妊婦健診スケジュール（目安）</h2></summary>
+        <summary><h2>${icon('hospital')}妊婦健診スケジュール（目安）</h2></summary>
         ${due ? `
         <p class="muted small">〜23週: 4週に1回 / 24〜35週: 2週に1回 / 36週〜: 毎週。実際の日程は産院の指示に従ってください。</p>
         <ul class="checklist">
@@ -1188,7 +1198,7 @@ function renderLists() {
 
     <section class="card">
       <details>
-        <summary><h2>🧳 入院準備リスト <span class="count">${progressText(bagKeys)}</span></h2></summary>
+        <summary><h2>${icon('bag')}入院準備リスト <span class="count">${progressText(bagKeys)}</span></h2></summary>
         ${HOSPITAL_BAG.map((g) => `
           <h3>${esc(g.group)}</h3>
           <ul class="checklist">${g.items.map((i) => checkbox(`bag:${i}`, i)).join('')}</ul>
@@ -1198,7 +1208,7 @@ function renderLists() {
 
     <section class="card">
       <details ${isBorn(child()) ? 'open' : ''}>
-        <summary><h2>📋 手続きリスト <span class="count">${progressText(procKeys)}</span></h2></summary>
+        <summary><h2>${icon('document')}手続きリスト <span class="count">${progressText(procKeys)}</span></h2></summary>
         <p class="muted small">制度の内容・期限は自治体や勤務先によって異なります。最新情報は各窓口で確認してください。</p>
         ${PROCEDURES.map((g) => `
           <h3>${esc(g.when)}</h3>
@@ -1308,7 +1318,7 @@ function exportData() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `maternity-backup-${todayStr()}.json`;
+  a.download = `sukusuku-backup-${todayStr()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
@@ -1383,7 +1393,7 @@ birthForm.addEventListener('submit', (e) => {
   if (first) {
     ui.growthView = 'records';
     switchTab('home');
-    toast('ご出産おめでとうございます 🎉', 3500);
+    toast('ご出産おめでとうございます', 3500);
   } else {
     render();
     toast('保存しました');
@@ -1401,7 +1411,7 @@ function openMilestone({ id = null, templateId = null } = {}) {
   milestoneForm.date.value = r?.date || todayStr();
   milestoneForm.title.value = r?.title || t?.title || '';
   milestoneForm.note.value = r?.note || '';
-  document.getElementById('milestone-title').textContent = `${t ? t.emoji : '🌟'} ${r ? 'できごと' : 'できごとを記録'}`;
+  document.getElementById('milestone-title').textContent = r ? 'できごと' : 'できごとを記録';
   document.getElementById('delete-milestone').hidden = !r;
   milestoneForm.querySelectorAll('input, textarea').forEach((i) => { i.disabled = !canEdit(); });
   const old = milestoneForm.querySelector('.photo-strip');
@@ -1586,7 +1596,7 @@ async function renderFamilySection() {
   if (!a) {
     const ok = await api.available();
     el.innerHTML = ok && api.passkeySupported() ? `
-      <h3>👪 家族と共有</h3>
+      <h3>${icon('users')}家族と共有</h3>
       <p class="small">パスキー（指紋・顔認証）でログインすると、パートナーや両親と記録・写真を共有できます。</p>
       <div class="actions wrap">
         <button type="button" class="btn primary" data-action="account-create">家族グループを作る</button>
@@ -1600,13 +1610,13 @@ async function renderFamilySection() {
           <button type="button" class="btn ghost" data-action="account-recover">復旧</button>
         </div>
       </details>`
-      : `<h3>👪 家族と共有</h3><p class="muted small">${ok ? 'このブラウザはパスキーに対応していないため、家族共有を使えません。' : '家族共有は、サーバー（Cloudflare）に公開したアプリで使えます。'}</p>`;
+      : `<h3>${icon('users')}家族と共有</h3><p class="muted small">${ok ? 'このブラウザはパスキーに対応していないため、家族共有を使えません。' : '家族共有は、サーバー（Cloudflare）に公開したアプリで使えます。'}</p>`;
     return;
   }
   const admin = a.role === 'admin';
   const members = familyMembers;
   el.innerHTML = `
-    <h3>👪 家族グループ</h3>
+    <h3>${icon('users')}家族グループ</h3>
     ${a.error === 'signed_out' ? '<p class="alert small">ログインの有効期限が切れました。<button type="button" class="btn primary tiny" data-action="account-login">再ログイン</button></p>' : ''}
     ${a.error === 'removed' ? '<p class="alert small">この家族グループのメンバーではなくなりました。<button type="button" class="btn ghost tiny" data-action="account-logout">ログアウト</button></p>' : ''}
     <p><strong>${esc(a.groupName)}</strong> <span class="badge">${ROLE_LABELS[a.role]}</span></p>
@@ -1622,7 +1632,7 @@ async function renderFamilySection() {
           ${Object.entries(ROLE_LABELS).map(([r, l]) => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${l}</option>`).join('')}
         </select>
         <button type="button" class="btn ghost tiny" data-action="member-relogin" data-uid="${esc(m.userId)}" title="端末をなくしたメンバー向け">再ログイン用リンク</button>
-        <button type="button" class="icon-btn small" data-action="member-remove" data-uid="${esc(m.userId)}" aria-label="${esc(m.displayName)}を外す">✕</button>`
+        <button type="button" class="icon-btn small" data-action="member-remove" data-uid="${esc(m.userId)}" aria-label="${esc(m.displayName)}を外す">${icon('close')}</button>`
         : `<span class="muted small">${ROLE_LABELS[m.role]}</span>`}
     </li>`).join('')}</ul>` : '<p class="muted small">読み込み中…</p>'}
     <p class="muted small">管理者: すべての操作と家族の管理 ／ 編集者（パートナーなど）: 記録の追加・編集 ／ 閲覧者（両親・祖父母など）: 見る・リアクション・コメント</p>
@@ -1683,9 +1693,9 @@ function openAccount(html) {
 
 function accountForm(kind, info = {}) {
   const titles = {
-    create: '👪 家族グループを作る',
-    invite: '👪 家族グループに参加',
-    link: '📱 この端末でログイン',
+    create: '家族グループを作る',
+    invite: '家族グループに参加',
+    link: 'この端末でログイン',
   };
   const intro = {
     create: '<p class="small">この端末の記録をそのまま家族グループに移します。ログインにはパスワードの代わりに<strong>パスキー</strong>（指紋・顔認証）を使います。</p>',
@@ -1711,7 +1721,7 @@ function accountForm(kind, info = {}) {
 
 function showRecoveryCode(code) {
   openAccount(`
-    <h2>🔑 復旧コード</h2>
+    <h2>${icon('key')}復旧コード</h2>
     <p class="small">パスキーの入った端末をすべてなくしたときに使います。<strong>スクリーンショットやメモで大切に保管</strong>してください（あとから表示することはできません）。</p>
     <p class="recovery-code">${esc(code)}</p>
     <div class="actions">
@@ -1741,7 +1751,7 @@ async function beginSync(me, { uploadLocal }) {
   render();
   loadMembers();
   if (dialogs.settings.open) renderFamilySection();
-  toast(syncEngine.account?.error ? '同期できませんでした。あとで自動的にやり直します' : '同期しました ☁️');
+  toast(syncEngine.account?.error ? '同期できませんでした。あとで自動的にやり直します' : '同期しました');
 }
 
 async function submitAccount(form) {
@@ -1801,7 +1811,7 @@ async function handleLanding(hash) {
 async function shareOrCopy(url, share) {
   if (share && navigator.share) {
     try {
-      await navigator.share({ title: 'マタニティ手帳', text: '家族グループへの招待です', url });
+      await navigator.share({ title: 'すくすくノート', text: '家族グループへの招待です', url });
       return;
     } catch {
       // キャンセル
@@ -2244,7 +2254,7 @@ document.addEventListener('submit', (e) => {
     const text = form.text.value.trim();
     if (!text) return;
     state.journal.push({
-      id: uuid(), date: todayStr(), mood: form.mood.value, text, createdAt: Date.now(),
+      id: uuid(), date: todayStr(), mood: Number(form.mood.value), text, createdAt: Date.now(),
       ...(form.private?.checked ? { private: true } : {}),
     });
     persist();
@@ -2270,6 +2280,7 @@ accountDialog.addEventListener('close', () => {
 dialogs.milestone.addEventListener('close', () => accountDialog.dispatchEvent(new Event('close')));
 dialogs.viewer.addEventListener('close', () => accountDialog.dispatchEvent(new Event('close')));
 
+hydrateIcons();
 ensureChild();
 updateRoleUi();
 

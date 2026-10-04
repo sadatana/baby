@@ -96,7 +96,7 @@ test('weekly content exists for weeks 4-41', () => {
   for (let w = 4; w <= 41; w++) {
     const info = WEEKS[w];
     assert.ok(info, `week ${w}`);
-    for (const k of ['size', 'emoji', 'length', 'weight', 'baby', 'mom', 'tip']) {
+    for (const k of ['size', 'length', 'weight', 'baby', 'mom', 'tip']) {
       assert.ok(info[k], `week ${w} ${k}`);
     }
   }
