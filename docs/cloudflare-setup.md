@@ -46,6 +46,15 @@ npx wrangler@4 r2 bucket create maternity-app-media  # 写真の保存場所（R
 
 解決しない場合は、方法 A（ダッシュボード）で作成すれば、このコマンドは不要です。
 
+### workers.dev のサブドメインを決める（初回のみ）
+
+Cloudflare ダッシュボード → **Workers & Pages** を開き、最初に表示される案内（または右側の **Subdomain**）で、
+アカウント用のサブドメインを登録します。公開 URL は `https://maternity-app.<サブドメイン>.workers.dev` になります。
+
+> パスキーはこの URL に結び付くため、あとから変えると登録済みのパスキーが使えなくなります。短く覚えやすい名前を選んでください。
+
+登録していないと、公開時に `You need to register a workers.dev subdomain before publishing to workers.dev` というエラーになります。
+
 ## 3. GitHub にシークレットを登録する
 
 1. Cloudflare ダッシュボード → 右上のアカウント → **My Profile → API Tokens → Create Token**

@@ -180,7 +180,7 @@ async function takeChallenge(ctx, id, kind) {
   return { challenge: row.challenge, data: JSON.parse(row.data) };
 }
 
-const APP_NAME = 'マタニティ手帳';
+const APP_NAME = 'すくすくノート';
 
 route('GET', '/api/health', () => json({ ok: true }));
 
