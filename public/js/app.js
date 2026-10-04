@@ -1900,6 +1900,8 @@ async function renderFamilySection() {
       <select data-action="switch-group">${a.groups.map((g) => `<option value="${esc(g.id)}" ${g.id === a.groupId ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>` : ''}
     <p class="small">あなたの名前: ${esc(a.displayName)} <button type="button" class="btn ghost tiny" data-action="account-rename">変更</button></p>
     <p class="small muted"><span id="sync-info"></span> <button type="button" class="btn ghost tiny" data-action="sync-now">今すぐ同期</button></p>
+    <h4>通知</h4>
+    <div id="push-row" class="push-row"></div>
     <h4>メンバー</h4>
     ${members ? `<ul class="members">${members.map((m) => `<li>
       <span class="m-name">${esc(m.displayName)}${m.userId === a.userId ? '（あなた）' : ''}</span>
@@ -1940,7 +1942,77 @@ async function renderFamilySection() {
       </div>
     </details>`;
   updateSyncStatus(null);
+  renderPushRow();
   if (!members) loadMembers();
+}
+
+// ---------- プッシュ通知 ----------
+
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+
+async function currentPushSubscription() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  } catch {
+    return null;
+  }
+}
+
+async function renderPushRow() {
+  const el = document.getElementById('push-row');
+  if (!el) return;
+  if (!pushSupported()) {
+    el.innerHTML = `<p class="muted small">${isIos() && !isStandalone()
+      ? 'iPhone・iPad では、Safari の共有ボタンから「ホーム画面に追加」したアプリで通知を使えます。'
+      : 'このブラウザは通知に対応していません。'}</p>`;
+    return;
+  }
+  const sub = await currentPushSubscription();
+  const denied = Notification.permission === 'denied';
+  el.innerHTML = `
+    <label class="toggle"><input type="checkbox" data-action="push-toggle" ${sub ? 'checked' : ''} ${denied ? 'disabled' : ''}>
+      家族が記録・写真・コメントを追加したら通知する</label>
+    <p class="muted small">${denied ? '通知がブロックされています。ブラウザ（または端末）の設定で、このアプリの通知を許可してください。'
+      : '同じ端末への通知は 10 分に 1 回までです。通知はこの端末だけの設定です。'}</p>`;
+}
+
+async function setPush(on) {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    if (!on) {
+      if (existing) {
+        await api.pushUnsubscribe(existing.endpoint).catch(() => {});
+        await existing.unsubscribe();
+      }
+      toast('通知をオフにしました');
+      return;
+    }
+    if (await Notification.requestPermission() !== 'granted') {
+      toast('通知が許可されませんでした', 4000);
+      return;
+    }
+    const { publicKey } = await api.pushKey();
+    const key = Uint8Array.from(atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    const sub = existing || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    await api.pushSubscribe(sub.toJSON());
+    toast('通知をオンにしました');
+  } catch {
+    toast('通知を設定できませんでした', 4000);
+  } finally {
+    renderPushRow();
+  }
+}
+
+// ログアウト・退会のときは、この端末への通知も止める
+async function stopPushOnThisDevice() {
+  const sub = pushSupported() ? await currentPushSubscription() : null;
+  if (!sub) return;
+  await api.pushUnsubscribe(sub.endpoint).catch(() => {});
+  await sub.unsubscribe().catch(() => {});
 }
 
 async function loadMembers() {
@@ -2145,6 +2217,7 @@ const FAMILY_ACTIONS = {
   },
   'account-logout': async () => {
     if (!confirm('ログアウトしますか？この端末の記録は残りますが、家族との同期は止まります。')) return;
+    await stopPushOnThisDevice();
     await api.logout().catch(() => {});
     syncEngine.signOut();
     media.setRemote(null);
@@ -2157,6 +2230,7 @@ const FAMILY_ACTIONS = {
   'account-delete': async () => {
     if (!confirm('アカウントを削除します。ほかに家族がいないグループは、記録と写真がすべて削除されます。よろしいですか？')) return;
     try {
+      await stopPushOnThisDevice();
       await api.deleteMe();
       syncEngine.signOut();
       media.setRemote(null);
@@ -2480,6 +2554,9 @@ document.addEventListener('change', async (e) => {
     persist();
     render();
     toast(el.checked ? '家族に共有しました' : '共有をやめました');
+  } else if (action === 'push-toggle') {
+    el.disabled = true;
+    await setPush(el.checked);
   } else if (action === 'member-role') {
     try {
       await api.setRole(account().groupId, el.dataset.uid, el.value);

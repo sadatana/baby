@@ -7,6 +7,7 @@ import { D1 } from '../dev/d1.js';
 import { R2 } from '../dev/r2.js';
 import { Authenticator } from './helpers/authenticator.js';
 import { decodeCbor, derToRaw } from '../worker/webauthn.js';
+import { fakeBrowserSubscription, decrypt, verifyVapid } from './helpers/push.js';
 
 const ORIGIN = 'http://localhost:8787';
 const MIGRATIONS = fileURLToPath(new URL('../migrations', import.meta.url));
@@ -328,4 +329,48 @@ test('the last admin cannot delete the account while others remain', async () =>
   const { mom, join } = await family();
   await join('viewer', 'ばあば');
   assert.equal((await mom.call('DELETE', '/api/me')).status, 409);
+});
+
+test('push: family members are notified when someone adds a record', async () => {
+  const { mom, gid, join } = await family();
+  const papa = await join('editor', 'パパ');
+  const sent = [];
+  let status = 201;
+  env.PUSH_FETCH = async (url, init) => {
+    sent.push({ url, init });
+    return new Response(null, { status });
+  };
+  const key = await papa.call('GET', '/api/push/key');
+  assert.equal(key.status, 200);
+  // 鍵は 1 度だけ作られ、以降は同じものが返る
+  assert.equal((await mom.call('GET', '/api/push/key')).body.publicKey, key.body.publicKey);
+  assert.equal((await new Client().call('GET', '/api/push/key')).status, 401);
+
+  const sub = await fakeBrowserSubscription();
+  assert.equal((await papa.call('POST', '/api/push/subscribe', { endpoint: sub.endpoint, keys: sub.keys })).status, 200);
+  assert.equal((await papa.call('POST', '/api/push/subscribe', { endpoint: 'http://x', keys: sub.keys })).status, 400);
+
+  await mom.sync(gid, [change('fetal', 'f1', { id: 'f1', efwG: 1500 })]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, sub.endpoint);
+  await verifyVapid(sent[0].init.headers.Authorization, key.body.publicKey, sub.endpoint);
+  const payload = JSON.parse(await decrypt(sent[0].init.body, sub));
+  assert.equal(payload.body, 'ママさんが健診の記録を追加しました');
+
+  // 10 分以内は送らない／更新・自分の記録は通知しない
+  await mom.sync(gid, [change('growth', 'g1', { id: 'g1' })]);
+  await papa.sync(gid, [change('fetal', 'f2', { id: 'f2' })]);
+  assert.equal(sent.length, 1);
+
+  // 購読が無効（410）なら削除する
+  await env.DB.prepare('UPDATE push_subscriptions SET last_sent_at = 0').run();
+  status = 410;
+  await mom.sync(gid, [change('milestone', 'm1', { id: 'm1', title: 'x' })]);
+  assert.equal(sent.length, 2);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').first()).n, 0);
+
+  // 解除
+  await papa.call('POST', '/api/push/subscribe', { endpoint: sub.endpoint, keys: sub.keys });
+  assert.equal((await papa.call('DELETE', '/api/push/subscribe', { endpoint: sub.endpoint })).status, 200);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').first()).n, 0);
 });

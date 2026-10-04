@@ -48,3 +48,35 @@ self.addEventListener('fetch', (e) => {
       .catch(() => caches.match(e.request, { ignoreSearch: true })),
   );
 });
+
+// ---------- プッシュ通知（家族が記録を追加したとき） ----------
+self.addEventListener('push', (e) => {
+  let data = {};
+  try {
+    data = e.data ? e.data.json() : {};
+  } catch {
+    // 形式が違う通知は既定の文言で表示する
+  }
+  e.waitUntil(self.registration.showNotification(data.title || 'すくすくノート', {
+    body: data.body || '家族が新しい記録を追加しました',
+    icon: 'icons/icon.svg',
+    badge: 'icons/icon.svg',
+    tag: data.tag || 'sukusuku',
+    renotify: true,
+    data: { url: data.url || './#album' },
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || './', self.location.origin).href;
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const win = wins.find((w) => w.url.startsWith(self.location.origin));
+    if (win) {
+      await win.focus();
+      return win.navigate(url);
+    }
+    return self.clients.openWindow(url);
+  })());
+});
