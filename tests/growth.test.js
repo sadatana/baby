@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDate } from '../public/js/pregnancy.js';
 import {
-  ageOf, formatAge, periodOf, gestAtBirth, buildTimeline, groupByPeriod, exifDate, MILESTONE_TEMPLATES,
+  ageOf, formatAge, periodOf, gestAtBirth, photoMonthOf, photoMonthLabel, buildTimeline, groupByPeriod, exifDate, MILESTONE_TEMPLATES,
 } from '../public/js/growth.js';
 import {
   fetalEfwAt, fetalEfwSd, infantPercentilesAt, percentileBand, INFANT_PERCENTILES,
@@ -179,4 +179,15 @@ test('store migrates v1 profile into first child and tracks deletes', () => {
   remove(s, 'growthRecords', r.id);
   assert.equal(s.growthRecords.length, 0);
   assert.equal(s.deleted[0].id, r.id);
+});
+
+test('photoMonthOf groups by pregnancy month, then by age in months', () => {
+  const child = { dueDate: '2026-10-08', birthDate: '2026-10-01' };
+  assert.deepEqual(photoMonthOf(child, '2026-03-01'), { phase: 'pregnancy', month: 3, key: 'p3' });
+  assert.equal(photoMonthLabel(photoMonthOf(child, '2026-09-30')), '妊娠10ヶ月');
+  assert.deepEqual(photoMonthOf(child, '2026-10-01'), { phase: 'baby', month: 0, key: 'b0' });
+  assert.equal(photoMonthLabel(photoMonthOf(child, '2026-12-15')), '2ヶ月');
+  assert.equal(photoMonthLabel(photoMonthOf(child, '2027-11-01')), '1歳1ヶ月');
+  assert.equal(photoMonthOf({}, '2026-03-01'), null);
+  assert.equal(photoMonthOf(child, '2025-12-01'), null);
 });

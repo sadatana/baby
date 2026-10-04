@@ -4,6 +4,7 @@ import {
   HttpError, json, uuid, randomToken, hashToken, b64url, randomBytes, recoveryCode, normalizeCode,
 } from './util.js';
 import { verifyRegistration, verifyAuthentication } from './webauthn.js';
+import { generateVapidKeys, sendPush, validEndpoint } from './push.js';
 
 const SESSION_COOKIE = '__Host-sid';
 const SESSION_TTL = 60 * 24 * 3600 * 1000; // 60 日
@@ -12,7 +13,8 @@ const INVITE_TTL = 7 * 24 * 3600 * 1000;
 const DEVICE_LINK_TTL = 15 * 60 * 1000;
 const RELOGIN_LINK_TTL = 24 * 3600 * 1000;
 const MAX_RECORD_BYTES = 32 * 1024;
-const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 動画（30 秒まで）は元のファイルのまま保存する
 const SYNC_PAGE = 500;
 const ROLES = ['admin', 'editor', 'viewer'];
 
@@ -23,13 +25,18 @@ const SOCIAL_TYPES = new Set(['reaction', 'comment']);
 const SELF_TYPES = new Set(['prefs', 'share']); // id = 本人のユーザー ID
 const ALL_TYPES = new Set([...BABY_TYPES, ...Object.keys(MOM_TYPES), ...SOCIAL_TYPES, ...SELF_TYPES]);
 const ID_RE = /^[A-Za-z0-9._:-]{1,100}$/;
+// 家族に通知する記録の種類と、通知の文言
+const NOTIFY_LABELS = {
+  fetal: '健診の記録', growth: '身長・体重の記録', milestone: 'できごと', media: '写真・動画', comment: 'コメント', child: '赤ちゃんの情報',
+};
+const NOTIFY_INTERVAL = 10 * 60 * 1000; // 同じ端末への通知は 10 分に 1 回まで
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, execCtx) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try {
-      return await handleApi(request, env, url);
+      return await handleApi(request, env, url, execCtx);
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.code || e.message }, e.status);
       console.error(e);
@@ -47,8 +54,10 @@ function route(method, pattern, handler) {
   routes.push({ method, re, keys, handler });
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, execCtx) {
   const ctx = {
+    // レスポンスを返した後に続ける処理（通知の送信など）。テストや開発用サーバーではその場で待つ
+    background: [],
     request,
     env,
     url,
@@ -66,7 +75,13 @@ async function handleApi(request, env, url) {
     const m = r.re.exec(url.pathname);
     if (!m) continue;
     ctx.params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-    return r.handler(ctx);
+    const res = await r.handler(ctx);
+    if (ctx.background.length) {
+      const all = Promise.allSettled(ctx.background);
+      if (execCtx?.waitUntil) execCtx.waitUntil(all);
+      else await all;
+    }
+    return res;
   }
   throw new HttpError(404, 'not found', 'not_found');
 }
@@ -363,6 +378,7 @@ route('DELETE', '/api/me', async (ctx) => {
   for (const m of results) await leaveGroup(ctx, m.group_id, user.id);
   await ctx.db.batch([
     ctx.db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id),
+    ctx.db.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').bind(user.id),
     ctx.db.prepare('DELETE FROM passkeys WHERE user_id = ?').bind(user.id),
     ctx.db.prepare('DELETE FROM links WHERE user_id = ?').bind(user.id),
     ctx.db.prepare('DELETE FROM recovery_codes WHERE user_id = ?').bind(user.id),
@@ -595,7 +611,7 @@ route('POST', '/api/groups/:gid/sync', async (ctx) => {
       continue;
     }
     result.status = 'ok';
-    writes.push({ c, deleting, dataText, updatedAt, owner: existing?.owner_id ?? user.id });
+    writes.push({ c, deleting, dataText, updatedAt, owner: existing?.owner_id ?? user.id, existed: !!existing });
     if (c.type === 'media' && deleting) mediaToDelete.push(c.id);
     if (c.type === 'share') shareChanged = true;
   }
@@ -630,7 +646,78 @@ route('POST', '/api/groups/:gid/sync', async (ctx) => {
   if (mediaToDelete.length) {
     await ctx.env.MEDIA.delete(mediaToDelete.flatMap((id) => [`${gid}/${id}/full`, `${gid}/${id}/thumb`]));
   }
+
+  // 新しく追加された記録を家族に通知する（更新・削除は通知しない）
+  const added = writes.filter((w) => !w.deleting && NOTIFY_LABELS[w.c.type] && !w.existed);
+  if (added.length) ctx.background.push(notifyFamily(ctx, gid, user, added.map((w) => w.c.type)));
   return json({ results });
+});
+
+// ---------- プッシュ通知 ----------
+
+async function vapidKeys(ctx) {
+  if (ctx.env.VAPID_PUBLIC_KEY && ctx.env.VAPID_PRIVATE_KEY) {
+    return { publicKey: ctx.env.VAPID_PUBLIC_KEY, privateKey: JSON.parse(ctx.env.VAPID_PRIVATE_KEY) };
+  }
+  const row = await ctx.db.prepare("SELECT value FROM app_settings WHERE key = 'vapid'").first();
+  if (row) return JSON.parse(row.value);
+  // 初回: 鍵を作って保存する（同時に作られた場合は先に保存された方を使う）
+  const keys = await generateVapidKeys();
+  await ctx.db.prepare("INSERT INTO app_settings (key, value) VALUES ('vapid', ?) ON CONFLICT(key) DO NOTHING")
+    .bind(JSON.stringify(keys)).run();
+  return JSON.parse((await ctx.db.prepare("SELECT value FROM app_settings WHERE key = 'vapid'").first()).value);
+}
+
+async function notifyFamily(ctx, gid, author, types) {
+  const { results } = await ctx.db.prepare(
+    `SELECT p.endpoint, p.p256dh, p.auth, p.last_sent_at FROM push_subscriptions p
+     JOIN memberships m ON m.user_id = p.user_id AND m.group_id = ?
+     WHERE p.user_id != ?`,
+  ).bind(gid, author.id).all();
+  const targets = results.filter((s) => !s.last_sent_at || ctx.now - s.last_sent_at >= NOTIFY_INTERVAL);
+  if (!targets.length) return;
+  const keys = await vapidKeys(ctx);
+  const label = NOTIFY_LABELS[types.find((t) => t !== 'child') || types[0]];
+  const payload = {
+    title: 'すくすくノート',
+    body: `${author.displayName}さんが${label}を追加しました`,
+    url: '/#album',
+    tag: `group-${gid}`,
+  };
+  const subject = ctx.env.VAPID_SUBJECT || `mailto:noreply@${ctx.url.hostname}`;
+  await Promise.all(targets.map(async (s) => {
+    const r = await sendPush(s, payload, keys, subject, ctx.env.PUSH_FETCH || fetch);
+    if (r === 'gone') await ctx.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').bind(s.endpoint).run();
+    else if (r === 'ok') await ctx.db.prepare('UPDATE push_subscriptions SET last_sent_at = ? WHERE endpoint = ?').bind(ctx.now, s.endpoint).run();
+  }));
+}
+
+route('GET', '/api/push/key', async (ctx) => {
+  await currentUser(ctx);
+  return json({ publicKey: (await vapidKeys(ctx)).publicKey });
+});
+
+route('POST', '/api/push/subscribe', async (ctx) => {
+  const user = await currentUser(ctx);
+  const b = await body(ctx);
+  const endpoint = String(b.endpoint || '');
+  const p256dh = String(b.keys?.p256dh || '');
+  const auth = String(b.keys?.auth || '');
+  if (!validEndpoint(endpoint) || !/^[A-Za-z0-9_-]{80,100}$/.test(p256dh) || !/^[A-Za-z0-9_-]{16,32}$/.test(auth)) {
+    throw new HttpError(400, 'invalid subscription', 'invalid_subscription');
+  }
+  await ctx.db.prepare(
+    `INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+  ).bind(endpoint, user.id, p256dh, auth, ctx.now).run();
+  return json({ ok: true });
+});
+
+route('DELETE', '/api/push/subscribe', async (ctx) => {
+  const user = await currentUser(ctx);
+  const b = await body(ctx);
+  await ctx.db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').bind(String(b.endpoint || ''), user.id).run();
+  return json({ ok: true });
 });
 
 // ---------- 写真 ----------
@@ -645,9 +732,11 @@ route('PUT', '/api/groups/:gid/media/:id/:size', async (ctx) => {
   await membership(ctx, ctx.params.gid, ['admin', 'editor']);
   const key = mediaKey(ctx);
   const type = ctx.request.headers.get('content-type') || '';
-  if (!/^image\/(jpeg|png|webp)$/.test(type)) throw new HttpError(415, 'unsupported media type', 'unsupported_media');
+  const image = /^image\/(jpeg|png|webp)$/.test(type);
+  const video = ctx.params.size === 'full' && /^video\/(mp4|quicktime|webm)$/.test(type);
+  if (!image && !video) throw new HttpError(415, 'unsupported media type', 'unsupported_media');
   const buf = await ctx.request.arrayBuffer();
-  if (!buf.byteLength || buf.byteLength > MAX_MEDIA_BYTES) throw new HttpError(413, 'too large', 'too_large');
+  if (!buf.byteLength || buf.byteLength > (video ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES)) throw new HttpError(413, 'too large', 'too_large');
   await ctx.env.MEDIA.put(key, buf, { httpMetadata: { contentType: type } });
   return json({ ok: true, bytes: buf.byteLength });
 });

@@ -68,6 +68,16 @@ function revoke(id) {
   urlCache.delete(id);
 }
 
+// 写真・動画のファイル本体（端末にない場合はサーバーから取得）
+export async function getBlob(id, size = 'full') {
+  const rec = await getFile(id).catch(() => null);
+  if (rec?.[size]) return rec[size];
+  if (!remote) return null;
+  const blob = await remote(id, size).catch(() => null);
+  if (blob) await putPart(id, size, blob).catch(() => {});
+  return blob;
+}
+
 export async function fileUrl(id, size = 'thumb') {
   const cached = urlCache.get(id)?.[size];
   if (cached) return cached;
@@ -112,8 +122,8 @@ async function decode(file) {
 }
 
 function resize(src, max, quality) {
-  const w = src.width;
-  const h = src.height;
+  const w = src.videoWidth || src.width;
+  const h = src.videoHeight || src.height;
   const scale = Math.min(1, max / Math.max(w, h));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(w * scale);
@@ -133,6 +143,60 @@ export async function importImage(file, id) {
   src.close?.();
   await putFile(id, full.blob, thumb.blob);
   return { width: full.width, height: full.height, takenAt: exifDate(head), bytes: full.blob.size };
+}
+
+// ---------- 動画 ----------
+
+export const VIDEO_MAX_SECONDS = 30;
+export const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+
+export class MediaError extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
+
+function loadVideo(url) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.onloadeddata = () => resolve(v);
+    v.onerror = () => reject(new MediaError('unsupported'));
+    v.src = url;
+  });
+}
+
+function seek(video, t) {
+  return new Promise((resolve) => {
+    video.onseeked = () => resolve();
+    video.currentTime = t;
+  });
+}
+
+// 動画はそのまま保存し、最初の場面から縮小画像（サムネイル）を作る
+export async function importVideo(file, id) {
+  if (file.size > VIDEO_MAX_BYTES) throw new MediaError('too_large');
+  const url = URL.createObjectURL(file);
+  try {
+    const video = await loadVideo(url);
+    if (!Number.isFinite(video.duration) || video.duration > VIDEO_MAX_SECONDS + 0.5) throw new MediaError('too_long');
+    await seek(video, Math.min(0.1, video.duration / 2));
+    const thumb = await resize(video, THUMB_MAX, 0.8);
+    const full = file.type ? file : new Blob([file], { type: 'video/mp4' });
+    await putFile(id, full, thumb.blob);
+    return {
+      width: video.videoWidth,
+      height: video.videoHeight,
+      duration: Math.round(video.duration * 10) / 10,
+      takenAt: null,
+      bytes: file.size,
+    };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 // ブラウザがストレージを自動削除しにくくなるよう依頼する（対応ブラウザのみ）

@@ -80,6 +80,15 @@ Cloudflare ダッシュボード → **Workers & Pages** を開き、最初に�
 > パスキーは公開したドメインに結び付きます。あとからドメインを変えると、登録済みのパスキーは使えなくなります
 > （その場合は「再ログイン用リンク」や復旧コードで登録し直せます）。最初に使うドメインを決めてから家族を招待するのがおすすめです。
 
+## プッシュ通知について
+
+追加の設定は不要です。通知の送信に使う鍵（VAPID）は、最初に誰かが通知をオンにしたときにサーバーが自動で作り、データベース（D1）に保存します。
+データベースの更新（`migrations/0002_push.sql`）は、公開のたびに GitHub Actions が自動で行います。
+
+自分で作った鍵を使いたい場合は、Cloudflare ダッシュボード → Workers & Pages → maternity-app → **Settings → Variables and Secrets** に、
+`VAPID_PUBLIC_KEY`（非圧縮公開鍵の base64url）と `VAPID_PRIVATE_KEY`（秘密鍵の JWK を JSON 文字列で）を **Secret** として登録してください。
+鍵を変えると、それまでにオンにした通知は届かなくなります（各端末で通知をオンにし直すと戻ります）。
+
 ## 5. GitHub Pages からの移行
 
 これまでの GitHub Pages（https://sadatana.github.io/baby/）も、端末内だけで使うアプリとしてそのまま動きます（家族共有は使えません）。

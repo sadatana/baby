@@ -130,3 +130,9 @@ export async function fetchMedia(gid, id, size) {
   const res = await request('GET', `/api/groups/${gid}/media/${encodeURIComponent(id)}/${size}`, undefined, { raw: true });
   return res.blob();
 }
+
+// ---------- プッシュ通知 ----------
+
+export const pushKey = () => request('GET', '/api/push/key');
+export const pushSubscribe = (sub) => request('POST', '/api/push/subscribe', sub);
+export const pushUnsubscribe = (endpoint) => request('DELETE', '/api/push/subscribe', { endpoint });

@@ -14,6 +14,7 @@ const P = {
   camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
   ruler: '<path d="M3 16.5 16.5 3 21 7.5 7.5 21z"/><path d="m7 12.5 1.5 1.5"/><path d="m10 9.5 2 2"/><path d="m13 6.5 1.5 1.5"/>',
   star: '<path d="m12 3 2.7 5.6 6.2.9-4.5 4.4 1 6.1L12 17.1 6.6 20l1-6.1L3.1 9.5l6.2-.9z"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   edit: '<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   close: '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
