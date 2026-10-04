@@ -250,6 +250,13 @@ test('photos: editors upload, every member can view, deletion removes the file',
   assert.equal(put.status, 200);
   assert.equal((await grandma.call('PUT', `/api/groups/${gid}/media/m2/full`, jpeg, { headers: { 'content-type': 'image/jpeg' } })).status, 403);
   assert.equal((await mom.call('PUT', `/api/groups/${gid}/media/m3/full`, jpeg, { headers: { 'content-type': 'text/html' } })).status, 415);
+  // 動画は本体（full）だけ受け付け、50MB まで
+  const mp4 = new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]);
+  assert.equal((await mom.call('PUT', `/api/groups/${gid}/media/v1/full`, mp4, { headers: { 'content-type': 'video/mp4' } })).status, 200);
+  assert.equal((await mom.call('PUT', `/api/groups/${gid}/media/v1/thumb`, mp4, { headers: { 'content-type': 'video/mp4' } })).status, 415);
+  const big = new Uint8Array(9 * 1024 * 1024);
+  assert.equal((await mom.call('PUT', `/api/groups/${gid}/media/m4/full`, big, { headers: { 'content-type': 'image/jpeg' } })).status, 413);
+  assert.equal((await mom.call('PUT', `/api/groups/${gid}/media/v2/full`, big, { headers: { 'content-type': 'video/mp4' } })).status, 200);
 
   const res = await grandma.call('GET', `/api/groups/${gid}/media/m1/full`, undefined, { raw: true });
   assert.equal(res.status, 200);

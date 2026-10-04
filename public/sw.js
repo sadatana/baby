@@ -1,5 +1,5 @@
 // オフラインでも使えるようにアプリ本体をキャッシュする
-const CACHE = 'sukusuku-v5';
+const CACHE = 'sukusuku-v6';
 const ASSETS = [
   './',
   'index.html',
@@ -16,6 +16,7 @@ const ASSETS = [
   'js/api.js',
   'js/sync.js',
   'js/icons.js',
+  'js/zip.js',
   'manifest.webmanifest',
   'icons/icon.svg',
 ];

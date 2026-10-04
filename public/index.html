@@ -14,7 +14,8 @@
 </head>
 <body>
   <header class="app-header">
-    <h1 class="app-title"><span class="logo" data-icon="logo"></span>すくすくノート</h1>
+    <h1 class="app-title"><span class="logo" data-icon="logo"></span><span class="app-name">すくすくノート</span></h1>
+    <button class="child-switch" id="child-switch" data-action="open-children" hidden aria-label="表示する子どもを切り替える"></button>
     <span class="header-actions">
       <button class="icon-btn sync-status" id="sync-status" data-action="open-settings" hidden aria-label="家族共有の同期状態"></button>
       <button class="icon-btn" data-action="open-settings" aria-label="設定"><span data-icon="settings"></span></button>
@@ -47,7 +48,10 @@
       <label>最終月経の開始日から計算
         <input type="date" name="lmp">
       </label>
-      <p><button type="button" class="btn ghost" data-action="open-birth">誕生を登録・編集</button></p>
+      <div class="actions wrap">
+        <button type="button" class="btn ghost" data-action="open-birth">誕生を登録・編集</button>
+        <button type="button" class="btn ghost" data-action="open-children">きょうだいを追加・切り替え</button>
+      </div>
       </div>
       <h3>ママ</h3>
       <div class="row2">
@@ -65,8 +69,9 @@
       <details class="data-tools">
         <summary>データの管理</summary>
         <p class="muted small">データはこの端末のブラウザ内にのみ保存されます。<span id="storage-usage"></span></p>
-        <p class="muted small">※ バックアップファイルには写真は含まれません。大切な写真は、写真を開いて「端末に保存」してください。</p>
+        <p class="muted small">「すべてを ZIP で保存」は、記録と写真・動画（元の画質）を 1 つのファイルにまとめます。「バックアップを保存」は記録だけの小さなファイルです。</p>
         <div class="actions wrap">
+          <button type="button" class="btn primary" data-action="export-zip">すべてを ZIP で保存</button>
           <button type="button" class="btn ghost" data-action="export">バックアップを保存</button>
           <label class="btn ghost file-btn" id="import-label">バックアップから復元
             <input type="file" accept="application/json" data-action="import" hidden>
@@ -139,6 +144,10 @@
     </form>
   </dialog>
 
+  <dialog id="children" class="sheet">
+    <div id="children-body"></div>
+  </dialog>
+
   <dialog id="account" class="sheet">
     <div id="account-body"></div>
   </dialog>
@@ -151,6 +160,7 @@
     <div class="viewer-body">
       <button class="icon-btn nav" data-action="viewer-prev" aria-label="前の写真"><span data-icon="chevronLeft"></span></button>
       <img id="viewer-img" alt="">
+      <video id="viewer-video" controls playsinline preload="metadata" hidden></video>
       <button class="icon-btn nav" data-action="viewer-next" aria-label="次の写真"><span data-icon="chevronRight"></span></button>
     </div>
     <form id="viewer-form" class="viewer-form">
@@ -164,6 +174,7 @@
       </div>
       <div class="actions wrap">
         <button type="submit" class="btn primary small edit-only">保存</button>
+        <button type="button" class="btn ghost small edit-only monthly-btn" data-action="viewer-monthly" hidden></button>
         <button type="button" class="btn ghost small" data-action="viewer-download">端末に保存</button>
         <button type="button" class="btn danger small edit-only" data-action="viewer-delete">削除</button>
       </div>

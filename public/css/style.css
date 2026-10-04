@@ -769,3 +769,80 @@ body[data-role="viewer"] .edit-only { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- 子どもの切り替え ---------- */
+.child-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 auto 0 10px;
+  padding: 5px 10px 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-weight: 650;
+  font-size: 0.9rem;
+  cursor: pointer;
+  max-width: 45vw;
+}
+.child-switch span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.child-switch .icon { width: 16px; height: 16px; color: var(--muted); }
+.child-list { list-style: none; padding: 0; margin: 0 0 8px; }
+.child-list li { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border); }
+.child-pick { flex: 1; display: flex; align-items: center; gap: 12px; padding: 10px 0; border: none; background: none; cursor: pointer; text-align: left; }
+.child-list li.active .ms-mark { background: var(--accent-soft); color: var(--accent); }
+
+/* ---------- 新着 ---------- */
+.new-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+}
+.tl.is-new { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.tabbar button { position: relative; }
+.tabbar button.has-new::after {
+  content: '';
+  position: absolute;
+  top: 9px;
+  left: calc(50% + 10px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--surface);
+}
+
+/* ---------- 月齢フォト ---------- */
+.hint { margin: 0 2px 12px; }
+.month-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.month-tile { margin: 0; }
+.month-tile .photo { width: 100%; border-radius: 12px; }
+.month-tile .placeholder { cursor: default; border: 1px dashed var(--border); background: transparent; }
+.month-tile figcaption { text-align: center; font-size: 0.78rem; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.month-tile.empty figcaption { color: var(--faint); }
+.viewer-form .monthly-btn.on { border-color: #2f5f57; color: #7fd3c3; }
+
+/* ---------- 動画 ---------- */
+.photo { position: relative; }
+.play-mark {
+  position: absolute;
+  inset: auto 6px 6px auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px 2px 4px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+.play-mark .icon { width: 14px; height: 14px; fill: currentColor; }
+.viewer-body video { max-width: 100%; max-height: 100%; }

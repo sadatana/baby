@@ -12,7 +12,8 @@ const INVITE_TTL = 7 * 24 * 3600 * 1000;
 const DEVICE_LINK_TTL = 15 * 60 * 1000;
 const RELOGIN_LINK_TTL = 24 * 3600 * 1000;
 const MAX_RECORD_BYTES = 32 * 1024;
-const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024; // 動画（30 秒まで）は元のファイルのまま保存する
 const SYNC_PAGE = 500;
 const ROLES = ['admin', 'editor', 'viewer'];
 
@@ -645,9 +646,11 @@ route('PUT', '/api/groups/:gid/media/:id/:size', async (ctx) => {
   await membership(ctx, ctx.params.gid, ['admin', 'editor']);
   const key = mediaKey(ctx);
   const type = ctx.request.headers.get('content-type') || '';
-  if (!/^image\/(jpeg|png|webp)$/.test(type)) throw new HttpError(415, 'unsupported media type', 'unsupported_media');
+  const image = /^image\/(jpeg|png|webp)$/.test(type);
+  const video = ctx.params.size === 'full' && /^video\/(mp4|quicktime|webm)$/.test(type);
+  if (!image && !video) throw new HttpError(415, 'unsupported media type', 'unsupported_media');
   const buf = await ctx.request.arrayBuffer();
-  if (!buf.byteLength || buf.byteLength > MAX_MEDIA_BYTES) throw new HttpError(413, 'too large', 'too_large');
+  if (!buf.byteLength || buf.byteLength > (video ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES)) throw new HttpError(413, 'too large', 'too_large');
   await ctx.env.MEDIA.put(key, buf, { httpMetadata: { contentType: type } });
   return json({ ok: true, bytes: buf.byteLength });
 });

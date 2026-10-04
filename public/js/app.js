@@ -5,7 +5,7 @@ import {
 } from './pregnancy.js';
 import { weekInfo, HOSPITAL_BAG, PROCEDURES, FOOD_NOTES, WARNING_SIGNS } from './data.js';
 import {
-  uuid, ageOf, formatAge, isBorn, periodOf, gestAtBirth, MILESTONE_TEMPLATES, milestoneTemplate,
+  uuid, ageOf, formatAge, isBorn, periodOf, gestAtBirth, MILESTONE_TEMPLATES, milestoneTemplate, photoMonthOf, photoMonthLabel,
   buildTimeline, groupByPeriod, DAYS_PER_MONTH,
 } from './growth.js';
 import {
@@ -17,6 +17,7 @@ import * as store from './store.js';
 import * as media from './media.js';
 import * as api from './api.js';
 import { createSyncEngine } from './sync.js';
+import { createZip, safeName } from './zip.js';
 import { icon, moodIcon, moodLevel, MOOD_LABELS, hydrateIcons } from './icons.js';
 
 let state = store.load();
@@ -40,6 +41,7 @@ const dialogs = {
   settings: document.getElementById('settings'),
   birth: document.getElementById('birth'),
   milestone: document.getElementById('milestone'),
+  children: document.getElementById('children'),
   viewer: document.getElementById('viewer'),
 };
 const settingsForm = document.getElementById('settings-form');
@@ -192,8 +194,11 @@ function photoStrip(ids = []) {
 }
 
 function photoThumb(id) {
-  return `<button class="photo" data-action="open-photo" data-id="${esc(id)}" aria-label="写真を開く">
-    <img data-media-id="${esc(id)}" alt="" loading="lazy"></button>`;
+  const m = state.media.find((x) => x.id === id);
+  const video = isVideo(m);
+  return `<button class="photo ${video ? 'video' : ''}" data-action="open-photo" data-id="${esc(id)}" aria-label="${video ? '動画' : '写真'}を開く">
+    <img data-media-id="${esc(id)}" alt="" loading="lazy">
+    ${video ? `<span class="play-mark">${icon('play')}${m.duration ? `<span>${Math.round(m.duration)}秒</span>` : ''}</span>` : ''}</button>`;
 }
 
 const timeFmt = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -203,38 +208,47 @@ const safeTime = (fmt, ms) => (Number.isFinite(Number(ms)) ? fmt.format(Number(m
 // ---------- 写真の取り込み ----------
 
 let busy = false;
+const isVideoFile = (f) => f.type.startsWith('video/') || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
+const isImageFile = (f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name);
+const isVideo = (m) => m?.kind === 'video';
+
+// 写真・動画を取り込む（写真は縮小して保存、動画は 30 秒・50MB まで）
 async function importPhotos(files, { takenAt = null } = {}) {
-  const list = [...(files || [])].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
+  const list = [...(files || [])].filter((f) => isImageFile(f) || isVideoFile(f));
   const ids = [];
-  let failed = 0;
+  const errors = [];
   for (let i = 0; i < list.length; i++) {
-    toast(`写真を保存しています… (${i + 1}/${list.length})`, 0);
+    toast(`保存しています… (${i + 1}/${list.length})`, 0);
     const id = uuid();
+    const file = list[i];
+    const video = isVideoFile(file);
     try {
-      const meta = await media.importImage(list[i], id);
+      const meta = video ? await media.importVideo(file, id) : await media.importImage(file, id);
       const now = Date.now();
       state.media.push({
         id,
         childId: child().id,
-        takenAt: takenAt || meta.takenAt || todayStr(),
+        takenAt: takenAt || meta.takenAt || (video && file.lastModified ? formatDate(today(new Date(file.lastModified))) : todayStr()),
         caption: '',
         width: meta.width,
         height: meta.height,
+        ...(video ? { kind: 'video', duration: meta.duration } : {}),
         createdAt: now,
         updatedAt: now,
       });
       ids.push(id);
       syncEngine.markLocalMedia(id);
-    } catch {
-      failed += 1;
+    } catch (e) {
+      errors.push(e?.code === 'too_long' ? '30秒を超える動画' : e?.code === 'too_large' ? '50MBを超える動画'
+        : video ? 'この端末で再生できない動画' : '読み込めない写真（JPEG・PNG でお試しください）');
     }
   }
   if (list.length) {
     persist();
     media.requestPersistence();
-    toast(failed
-      ? `${ids.length}枚保存、${failed}枚は読み込めませんでした（JPEG・PNG 形式でお試しください）`
-      : `写真を${ids.length}枚保存しました`, failed ? 4000 : 2400);
+    toast(errors.length
+      ? `${ids.length}件保存しました。保存できなかったもの: ${[...new Set(errors)].join('、')}`
+      : `${ids.length}件保存しました`, errors.length ? 5000 : 2400);
   }
   return ids;
 }
@@ -385,8 +399,8 @@ function renderBabyHome() {
 function renderQuickActions() {
   return `
     <section class="quick edit-only">
-      <label class="quick-btn">${icon('camera')}<span>写真を追加</span>
-        <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
+      <label class="quick-btn">${icon('camera')}<span>写真・動画</span>
+        <input type="file" accept="image/*,video/*" multiple data-action="add-photos" hidden>
       </label>
       <button class="quick-btn" data-action="goto-tab" data-tab="growth">${icon('ruler')}<span>${isBorn(child()) ? '身長・体重' : '健診の記録'}</span></button>
       <button class="quick-btn" data-action="new-milestone">${icon('star')}<span>できごと</span></button>
@@ -757,15 +771,15 @@ function renderWeeks() {
 // ---------- アルバム ----------
 
 function renderAlbum() {
-  const head = segmented('albumView', ui.albumView, [['timeline', 'タイムライン'], ['photos', '写真'], ['milestones', 'できごと']]);
+  const head = segmented('albumView', ui.albumView, [['timeline', 'タイムライン'], ['photos', '写真'], ['monthly', '月齢フォト'], ['milestones', 'できごと']]);
   const add = `
     <div class="album-actions edit-only">
-      <label class="btn primary file-btn">${icon('camera')}写真を追加
-        <input type="file" accept="image/*" multiple data-action="add-photos" hidden>
+      <label class="btn primary file-btn">${icon('camera')}写真・動画
+        <input type="file" accept="image/*,video/*" multiple data-action="add-photos" hidden>
       </label>
       <button class="btn ghost" data-action="new-milestone">${icon('star')}できごと</button>
     </div>`;
-  const body = { timeline: renderTimeline, photos: renderPhotos, milestones: renderMilestones }[ui.albumView]();
+  const body = { timeline: renderTimeline, photos: renderPhotos, monthly: renderMonthly, milestones: renderMilestones }[ui.albumView]();
   return head + add + body;
 }
 
@@ -795,35 +809,77 @@ function renderTimeline() {
       </section>`).join('')}`;
 }
 
+// ---------- 新着（前回アルバムを見たとき以降に家族が追加したもの） ----------
+
+const SEEN_KEY = 'sukusuku:album-seen';
+let albumSeenAt = (() => {
+  try {
+    return Number(localStorage.getItem(SEEN_KEY)) || Date.now();
+  } catch {
+    return Date.now();
+  }
+})();
+
+function markAlbumSeen() {
+  albumSeenAt = Date.now();
+  try {
+    localStorage.setItem(SEEN_KEY, String(albumSeenAt));
+  } catch {
+    // 保存できなくても表示に影響しない
+  }
+}
+
+// 家族（自分以外）が前回の確認以降に追加した記録か
+function isNew(r) {
+  const a = account();
+  if (!a || !r) return false;
+  const by = r.createdBy || r.ownerId;
+  return !!by && by !== a.userId && (Number(r.createdAt) || 0) > albumSeenAt;
+}
+
+function itemIsNew(item) {
+  if (item.kind === 'photos') return item.media.some(isNew);
+  const target = item.kind === 'birth' ? `birth:${item.record.id}` : String(item.record?.id);
+  return isNew(item.record) || state.comments.some((c) => c.targetId === target && isNew(c));
+}
+
+function hasNewInAlbum() {
+  if (!account()) return false;
+  const id = child().id;
+  return ['fetalRecords', 'growthRecords', 'milestones', 'media'].some((k) => state[k].some((r) => r.childId === id && isNew(r)))
+    || state.comments.some(isNew) || state.journal.some(isNew);
+}
+
 function timelineItem(item) {
-  const date = `<span class="tl-date">${esc(item.date)}</span>`;
+  const fresh = itemIsNew(item);
+  const date = `<span class="tl-date">${esc(item.date)}${fresh ? '<span class="new-badge">新着</span>' : ''}</span>`;
   switch (item.kind) {
     case 'fetal':
-      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">${icon('ruler')}健診の記録</p>
+      return `<li class="tl tl-measure${fresh ? ' is-new' : ''}">${date}${byline(item.record)}<p class="tl-title">${icon('ruler')}健診の記録</p>
         <div class="vals">${fetalValues(item.record)}</div>
         ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}
         ${socialBar('fetal', item.record.id)}</li>`;
     case 'growth':
-      return `<li class="tl tl-measure">${date}${byline(item.record)}<p class="tl-title">${icon('ruler')}計測</p>
+      return `<li class="tl tl-measure${fresh ? ' is-new' : ''}">${date}${byline(item.record)}<p class="tl-title">${icon('ruler')}計測</p>
         <div class="vals">${growthValues(item.record)}</div>
         ${item.record.note ? `<p class="note">${esc(item.record.note)}</p>` : ''}${photoStrip(item.record.photoIds)}
         ${socialBar('growth', item.record.id)}</li>`;
     case 'birth':
-      return `<li class="tl tl-birth">${date}<p class="tl-title">${icon('gift')}${babyLabel()}誕生</p>
+      return `<li class="tl tl-birth${fresh ? ' is-new' : ''}">${date}<p class="tl-title">${icon('gift')}${babyLabel()}誕生</p>
         <div class="vals">${birthValues(item.record)}</div>${socialBar('birth', `birth:${item.record.id}`)}</li>`;
     case 'milestone': {
       const t = milestoneTemplate(item.record.templateId);
-      return `<li class="tl tl-milestone">${date}
+      return `<li class="tl tl-milestone${fresh ? ' is-new' : ''}">${date}
         <p class="tl-title">${icon(t ? t.icon : 'star')}${esc(item.record.title)}
           <button class="icon-btn small" data-action="edit-milestone" data-id="${esc(item.record.id)}" aria-label="開く">${icon('chevronRight')}</button></p>
         ${item.record.note ? `<p class="note">${esc(item.record.note).replace(/\n/g, '<br>')}</p>` : ''}${photoStrip(item.record.photoIds)}
         ${socialBar('milestone', item.record.id)}</li>`;
     }
     case 'photos':
-      return `<li class="tl tl-photo">${date}<p class="tl-title">${icon('camera')}写真 ${item.media.length}枚</p>
+      return `<li class="tl tl-photo${fresh ? ' is-new' : ''}">${date}<p class="tl-title">${icon('camera')}${item.media.some(isVideo) ? '写真・動画' : '写真'} ${item.media.length}件</p>
         <div class="photo-strip">${item.media.map((m) => photoThumb(m.id)).join('')}</div></li>`;
     case 'journal':
-      return `<li class="tl tl-journal">${date}${isMine(item.record) ? '' : byline(item.record, true)}<p class="tl-title">${moodIcon(moodLevel(item.record.mood))}日記${item.record.private ? icon('lock', 'inline') : ''}</p>
+      return `<li class="tl tl-journal${fresh ? ' is-new' : ''}">${date}${isMine(item.record) ? '' : byline(item.record, true)}<p class="tl-title">${moodIcon(moodLevel(item.record.mood))}日記${item.record.private ? icon('lock', 'inline') : ''}</p>
         <p class="note">${esc(item.record.text).replace(/\n/g, '<br>')}</p>${socialBar('journal', String(item.record.id))}</li>`;
     default:
       return '';
@@ -900,6 +956,47 @@ function renderPhotos() {
       <h3 class="tl-head">${esc(g.label)} <span class="muted small">${g.items.length}枚</span></h3>
       <div class="photo-grid">${g.items.map((i) => photoThumb(i.media.id)).join('')}</div>
     </section>`).join('');
+}
+
+// 月齢フォト: 月ごとに 1 枚ずつ並べて成長を見比べる
+function renderMonthly() {
+  const c = child();
+  const chosen = new Map();
+  for (const m of mine(state.media)) {
+    if (!m.monthly) continue;
+    const pm = photoMonthOf(c, m.takenAt);
+    if (pm) chosen.set(pm.key, m);
+  }
+  const t = today();
+  const tile = (pm) => {
+    const m = chosen.get(pm.key);
+    return `<figure class="month-tile ${m ? '' : 'empty'}">
+      ${m ? photoThumb(m.id) : '<div class="photo placeholder"></div>'}
+      <figcaption>${esc(photoMonthLabel(pm))}</figcaption>
+    </figure>`;
+  };
+  const birth = parseDate(c.birthDate);
+  const due = dueDate();
+  let html = '';
+  if (due || birth) {
+    const lastP = birth ? photoMonthOf(c, formatDate(addDays(birth, -1)))
+      : photoMonthOf(c, formatDate(t));
+    if (lastP?.phase === 'pregnancy') {
+      const months = [];
+      for (let i = 2; i <= lastP.month; i++) months.push({ phase: 'pregnancy', month: i, key: `p${i}` });
+      html += `<section class="card"><h2>${icon('mom')}おなかの写真</h2><div class="month-grid">${months.map(tile).join('')}</div></section>`;
+    }
+  }
+  if (birth) {
+    const now = ageOf(birth, t)?.totalMonths ?? 0;
+    const months = [];
+    for (let i = 0; i <= Math.min(now, 47); i++) months.push({ phase: 'baby', month: i, key: `b${i}` });
+    html += `<section class="card"><h2>${icon('baby')}生まれてから</h2><div class="month-grid">${months.map(tile).join('')}</div></section>`;
+  }
+  if (!html) {
+    return '<section class="card"><p class="muted">出産予定日か誕生日を設定すると、月ごとの写真を並べて見られます。</p></section>';
+  }
+  return `<p class="muted small hint">写真を開いて「月齢フォトにする」を押すと、その月の 1 枚として表示されます。毎月同じ場所・同じ構図で撮ると、成長がよく分かります。</p>${html}`;
 }
 
 function renderMilestones() {
@@ -1229,10 +1326,12 @@ const LEGACY_TABS = { weeks: ['growth', { growthView: 'guide' }], tools: ['mom',
 
 function render({ keepScroll = true } = {}) {
   const y = window.scrollY;
+  updateChildSwitch();
   view.innerHTML = RENDERERS[currentTab]();
   document.querySelectorAll('.tabbar button').forEach((b) => {
     const active = b.dataset.tab === currentTab;
     b.classList.toggle('active', active);
+    if (b.dataset.tab === 'album') b.classList.toggle('has-new', !active && hasNewInAlbum());
     if (active) b.setAttribute('aria-current', 'page');
     else b.removeAttribute('aria-current');
   });
@@ -1251,6 +1350,7 @@ function switchTab(tab) {
     [tab] = LEGACY_TABS[tab];
   }
   if (!RENDERERS[tab]) return;
+  if (currentTab === 'album' && tab !== 'album') markAlbumSeen();
   currentTab = tab;
   ui.editing = null;
   if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`);
@@ -1323,6 +1423,58 @@ function exportData() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// すべてのデータを ZIP で保存（記録の JSON と、写真・動画の元のファイル）
+async function exportZip() {
+  if (busy) return;
+  busy = true;
+  try {
+    const files = [
+      { name: 'data.json', data: JSON.stringify(state, null, 2) },
+      {
+        name: 'README.txt',
+        data: [
+          'すくすくノート バックアップ',
+          `作成日: ${formatDateJa(today())}`,
+          '',
+          'data.json  … 記録のデータ（設定の「バックアップから復元」で読み込めます）',
+          'photos/    … 写真・動画（子どもごと、撮影日順）',
+        ].join('\r\n'),
+      },
+    ];
+    const folders = new Map(state.children.map((c, i) => [c.id, safeName(childName(c, i))]));
+    const list = [...state.media].sort((a, b) => a.takenAt.localeCompare(b.takenAt));
+    let missing = 0;
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      toast(`写真・動画を集めています… (${i + 1}/${list.length})`, 0);
+      const blob = await media.getBlob(m.id, 'full');
+      if (!blob) {
+        missing += 1;
+        continue;
+      }
+      const ext = isVideo(m) ? ({ 'video/quicktime': 'mov', 'video/webm': 'webm' }[blob.type] || 'mp4') : 'jpg';
+      const caption = m.caption ? `_${safeName(m.caption).slice(0, 20)}` : '';
+      files.push({
+        name: `photos/${folders.get(m.childId) || 'other'}/${m.takenAt}_${String(m.id).slice(0, 8)}${caption}.${ext}`,
+        data: blob,
+        date: new Date(m.createdAt || Date.now()),
+      });
+    }
+    toast('ZIP ファイルを作成しています…', 0);
+    const zip = await createZip(files);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(zip);
+    a.download = `sukusuku-${todayStr()}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60 * 1000);
+    toast(missing ? `保存しました（${missing}件の写真・動画は取得できませんでした）` : `保存しました（写真・動画 ${list.length} 件）`, 4000);
+  } catch (e) {
+    toast(e?.message === 'too_large' ? 'データが大きすぎて 1 つの ZIP にできません（約 4GB まで）' : 'ZIP を作成できませんでした', 5000);
+  } finally {
+    busy = false;
+  }
+}
+
 async function importData(file) {
   try {
     const data = JSON.parse(await file.text());
@@ -1336,6 +1488,113 @@ async function importData(file) {
   } catch {
     toast('バックアップファイルを読み込めませんでした');
   }
+}
+
+// ---------- 子ども（きょうだい） ----------
+
+function childStatus(c) {
+  const birth = parseDate(c.birthDate);
+  if (birth) return formatAge(ageOf(birth, today())) || '誕生予定';
+  const due = parseDate(c.dueDate);
+  if (!due) return '予定日未設定';
+  const ga = gestationalAge(due, today());
+  return ga.notStarted ? '予定日未確認' : `妊娠${ga.week}週${ga.day}日`;
+}
+
+const childName = (c, i) => c.name || (state.children.length > 1 ? `${i + 1}人目` : '赤ちゃん');
+
+function updateChildSwitch() {
+  const el = document.getElementById('child-switch');
+  const multi = state.children.length > 1;
+  el.hidden = !multi;
+  document.querySelector('.app-name').hidden = multi;
+  if (multi) {
+    const i = Math.max(0, state.children.findIndex((c) => c.id === child().id));
+    el.innerHTML = `<span>${esc(childName(child(), i))}</span>${icon('chevronDown')}`;
+  }
+}
+
+function renderChildrenDialog() {
+  const body = document.getElementById('children-body');
+  body.innerHTML = `
+    <h2>${icon('baby')}子どもを切り替え</h2>
+    <ul class="child-list">
+      ${state.children.map((c, i) => `<li class="${c.id === child().id ? 'active' : ''}">
+        <button type="button" class="child-pick" data-action="select-child" data-id="${esc(c.id)}">
+          <span class="ms-mark">${icon(c.id === child().id ? 'checkCircle' : 'circle')}</span>
+          <span class="ms-body"><strong>${esc(childName(c, i))}</strong><small class="muted">${esc(childStatus(c))}</small></span>
+        </button>
+        ${state.children.length > 1 ? `<button type="button" class="icon-btn small edit-only" data-action="delete-child" data-id="${esc(c.id)}" aria-label="${esc(childName(c, i))}を削除">${icon('trash')}</button>` : ''}
+      </li>`).join('')}
+    </ul>
+    <form data-form="add-child" class="record-form edit-only">
+      <h3>${icon('plus')}きょうだいを追加</h3>
+      <label>ニックネーム・名前<input name="name" maxlength="20" required placeholder="例: ふたばちゃん"></label>
+      <fieldset class="seg-field">
+        <legend>状態</legend>
+        <label><input type="radio" name="stage" value="pregnancy" checked><span>妊娠中</span></label>
+        <label><input type="radio" name="stage" value="born"><span>生まれている</span></label>
+      </fieldset>
+      <label><span data-stage-label>出産予定日</span><input type="date" name="date" required></label>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-action="close-dialog">閉じる</button>
+        <button class="btn primary">追加</button>
+      </div>
+    </form>
+    <div class="actions" ${canEdit() ? 'hidden' : ''}><button type="button" class="btn ghost" data-action="close-dialog">閉じる</button></div>`;
+  body.querySelectorAll('input[name="stage"]').forEach((r) => r.addEventListener('change', () => {
+    body.querySelector('[data-stage-label]').textContent = r.value === 'born' && r.checked ? '生年月日' : '出産予定日';
+  }));
+}
+
+function openChildren() {
+  renderChildrenDialog();
+  if (!dialogs.children.open) dialogs.children.showModal();
+}
+
+function selectChild(id) {
+  if (!state.children.some((c) => c.id === id)) return;
+  state.activeChildId = id;
+  ui.editing = null;
+  selectedWeek = null;
+  store.save(state); // どの子を表示しているかは端末ごとの設定（同期しない）
+  render({ keepScroll: false });
+}
+
+function addChild(form) {
+  const name = form.name.value.trim();
+  const date = form.date.value;
+  const born = form.stage.value === 'born';
+  if (!name || !parseDate(date)) return;
+  const diff = diffDays(parseDate(date), today());
+  if (born ? diff > 0 : diff > 300 || diff < -60) {
+    toast(born ? '生年月日を確認してください' : '出産予定日を確認してください');
+    return;
+  }
+  const c = store.newChild({ name, ...(born ? { birthDate: date } : { dueDate: date }) });
+  state.children.push(c);
+  state.activeChildId = c.id;
+  persist();
+  dialogs.children.close();
+  dialogs.settings.close();
+  render({ keepScroll: false });
+  toast(`${name}を追加しました`);
+}
+
+function deleteChild(id) {
+  const c = state.children.find((x) => x.id === id);
+  if (!c || state.children.length < 2) return;
+  const counts = ['fetalRecords', 'growthRecords', 'milestones', 'media'].reduce((n, k) => n + state[k].filter((r) => r.childId === id).length, 0);
+  if (!confirm(`${c.name || 'この子'}を削除しますか？記録・写真 ${counts} 件もすべて削除され、元に戻せません。`)) return;
+  for (const k of ['fetalRecords', 'growthRecords', 'milestones']) state[k] = state[k].filter((r) => r.childId !== id);
+  const mediaIds = state.media.filter((m) => m.childId === id).map((m) => m.id);
+  state.media = state.media.filter((m) => m.childId !== id);
+  mediaIds.forEach((m) => media.deleteFile(m).catch(() => {}));
+  state.children = state.children.filter((x) => x.id !== id);
+  if (state.activeChildId === id) state.activeChildId = state.children[0].id;
+  persist();
+  renderChildrenDialog();
+  render();
 }
 
 // ---------- 誕生の登録 ----------
@@ -1471,7 +1730,13 @@ async function showViewerPhoto() {
     return;
   }
   const img = document.getElementById('viewer-img');
+  const vid = document.getElementById('viewer-video');
   img.removeAttribute('src');
+  vid.pause();
+  vid.removeAttribute('src');
+  vid.load();
+  img.hidden = isVideo(m);
+  vid.hidden = !isVideo(m);
   document.getElementById('viewer-meta').textContent = `${m.takenAt}・${periodLabel(m.takenAt)}（${viewerIndex + 1}/${viewerIds.length}）`;
   viewerForm.takenAt.value = m.takenAt;
   viewerForm.caption.value = m.caption || '';
@@ -1479,10 +1744,19 @@ async function showViewerPhoto() {
   viewerForm.takenAt.readOnly = !canEdit();
   viewerForm.caption.readOnly = !canEdit();
   renderViewerSocial();
+  const pm = photoMonthOf(child(), m.takenAt);
+  const monthlyBtn = dialogs.viewer.querySelector('[data-action="viewer-monthly"]');
+  monthlyBtn.hidden = !pm || isVideo(m);
+  monthlyBtn.classList.toggle('on', !!m.monthly);
+  monthlyBtn.innerHTML = `${icon(m.monthly ? 'checkCircle' : 'star')}${m.monthly ? `${esc(photoMonthLabel(pm))}の月齢フォト` : '月齢フォトにする'}`;
   dialogs.viewer.querySelector('[data-action="viewer-prev"]').disabled = viewerIndex === 0;
   dialogs.viewer.querySelector('[data-action="viewer-next"]').disabled = viewerIndex >= viewerIds.length - 1;
+  if (isVideo(m)) {
+    const poster = await media.fileUrl(m.id, 'thumb').catch(() => null);
+    if (poster) vid.poster = poster;
+  }
   const url = await media.fileUrl(m.id, 'full').catch(() => null);
-  if (url && viewerIds[viewerIndex] === m.id) img.src = url;
+  if (url && viewerIds[viewerIndex] === m.id) (isVideo(m) ? vid : img).src = url;
 }
 
 function renderViewerSocial() {
@@ -1511,7 +1785,9 @@ async function downloadViewerPhoto() {
   if (!url) return;
   const a = document.createElement('a');
   a.href = url;
-  a.download = `baby-${m.takenAt}-${m.id.slice(0, 6)}.jpg`;
+  const blob = (await media.getFile(m.id).catch(() => null))?.full;
+  const ext = isVideo(m) ? ({ 'video/quicktime': 'mov', 'video/webm': 'webm' }[blob?.type] || 'mp4') : 'jpg';
+  a.download = `sukusuku-${m.takenAt}-${m.id.slice(0, 6)}.${ext}`;
   a.click();
 }
 
@@ -1991,6 +2267,7 @@ const ACTIONS = {
   'open-settings': () => openSettings(),
   'close-dialog': (el) => el.closest('dialog')?.close(),
   export: () => exportData(),
+  'export-zip': () => exportZip(),
   reset: async () => {
     if (account()) {
       if (!confirm('この端末から記録と写真を消して、ログアウトします。家族グループの記録は消えません。よろしいですか？')) return;
@@ -2007,6 +2284,12 @@ const ACTIONS = {
     toast('削除しました');
   },
   'open-birth': () => openBirth(),
+  'open-children': () => openChildren(),
+  'select-child': (el) => {
+    selectChild(el.dataset.id);
+    dialogs.children.close();
+  },
+  'delete-child': (el) => deleteChild(el.dataset.id),
   'clear-birth': () => {
     if (!confirm('誕生の登録を取り消しますか？（記録や写真は消えません）')) return;
     Object.assign(child(), { birthDate: '', updatedAt: Date.now() });
@@ -2090,6 +2373,25 @@ const ACTIONS = {
     }
   },
   'viewer-download': () => downloadViewerPhoto(),
+  'viewer-monthly': () => {
+    const m = state.media.find((x) => x.id === viewerIds[viewerIndex]);
+    const pm = m && photoMonthOf(child(), m.takenAt);
+    if (!pm) return;
+    if (m.monthly) {
+      store.upsert(state.media, { id: m.id, monthly: false });
+    } else {
+      // 同じ月の月齢フォトは 1 枚だけ
+      for (const other of mine(state.media)) {
+        if (other.monthly && other.id !== m.id && photoMonthOf(child(), other.takenAt)?.key === pm.key) {
+          store.upsert(state.media, { id: other.id, monthly: false });
+        }
+      }
+      store.upsert(state.media, { id: m.id, monthly: true });
+    }
+    persist();
+    showViewerPhoto();
+    render();
+  },
   'viewer-delete': async () => {
     if (!confirm('この写真を削除しますか？この操作は取り消せません。')) return;
     const id = viewerIds[viewerIndex];
@@ -2229,6 +2531,10 @@ document.addEventListener('submit', (e) => {
     submitAccount(form);
     return;
   }
+  if (kind === 'add-child') {
+    addChild(form);
+    return;
+  }
   if (kind === 'comment') {
     const text = form.text.value.trim();
     if (!text || !account()) return;
@@ -2278,7 +2584,10 @@ accountDialog.addEventListener('close', () => {
   }
 });
 dialogs.milestone.addEventListener('close', () => accountDialog.dispatchEvent(new Event('close')));
-dialogs.viewer.addEventListener('close', () => accountDialog.dispatchEvent(new Event('close')));
+dialogs.viewer.addEventListener('close', () => {
+  document.getElementById('viewer-video').pause();
+  accountDialog.dispatchEvent(new Event('close'));
+});
 
 hydrateIcons();
 ensureChild();
@@ -2296,6 +2605,7 @@ if (account()) {
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') syncEngine.run();
+  else if (currentTab === 'album') markAlbumSeen();
 });
 window.addEventListener('online', () => syncEngine.run());
 setInterval(() => {

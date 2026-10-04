@@ -1,5 +1,5 @@
 // 赤ちゃんの成長記録に関する計算ロジック（DOM非依存）
-import { parseDate, diffDays, gestationalAge } from './pregnancy.js';
+import { parseDate, diffDays, gestationalAge, monthOf } from './pregnancy.js';
 
 export const DAYS_PER_MONTH = 30.4375;
 
@@ -66,6 +66,30 @@ export function periodOf(child, dateStr) {
     if (ga.week >= 0) return { key: `p${String(ga.week).padStart(2, '0')}`, label: `妊娠${ga.week}週` };
   }
   return { key: `d${dateStr.slice(0, 7)}`, label: dateStr.slice(0, 7).replace('-', '年') + '月' };
+}
+
+// 月齢フォトの区切り: 妊娠中は妊娠月（2〜10ヶ月）、生まれてからは月齢（0ヶ月〜）
+export function photoMonthOf(child, dateStr) {
+  const d = parseDate(dateStr);
+  if (!d) return null;
+  const birth = parseDate(child?.birthDate);
+  if (birth && diffDays(d, birth) >= 0) {
+    const age = ageOf(birth, d);
+    return { phase: 'baby', month: age.totalMonths, key: `b${age.totalMonths}` };
+  }
+  const due = parseDate(child?.dueDate);
+  if (!due) return null;
+  const ga = gestationalAge(due, d);
+  if (ga.week < 0) return null;
+  const month = monthOf(ga.week);
+  return { phase: 'pregnancy', month, key: `p${month}` };
+}
+
+export function photoMonthLabel(pm) {
+  if (!pm) return '';
+  if (pm.phase === 'pregnancy') return `妊娠${pm.month}ヶ月`;
+  if (pm.month < 12) return `${pm.month}ヶ月`;
+  return `${Math.floor(pm.month / 12)}歳${pm.month % 12 ? `${pm.month % 12}ヶ月` : ''}`;
 }
 
 // 生まれたときの在胎週数
