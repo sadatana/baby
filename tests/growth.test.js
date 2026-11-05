@@ -5,7 +5,7 @@ import {
   ageOf, formatAge, periodOf, gestAtBirth, photoMonthOf, photoMonthLabel, buildTimeline, groupByPeriod, exifDate, MILESTONE_TEMPLATES,
 } from '../public/js/growth.js';
 import {
-  fetalEfwAt, fetalEfwSd, infantPercentilesAt, percentileBand, INFANT_PERCENTILES,
+  fetalEfwAt, fetalEfwSd, infantPercentilesAt, percentileBand, INFANT_PERCENTILES, fetalMeasureRange, FETAL_LIMITS,
 } from '../public/js/standards.js';
 import { ticks, niceStep, lineChart } from '../public/js/charts.js';
 import { mergeState, upsert, remove } from '../public/js/store.js';
@@ -190,4 +190,29 @@ test('photoMonthOf groups by pregnancy month, then by age in months', () => {
   assert.equal(photoMonthLabel(photoMonthOf(child, '2027-11-01')), '1歳1ヶ月');
   assert.equal(photoMonthOf({}, '2026-03-01'), null);
   assert.equal(photoMonthOf(child, '2025-12-01'), null);
+});
+
+test('fetal measurement ranges catch unit and digit mistakes', () => {
+  const inRange = (key, week, v) => {
+    const r = fetalMeasureRange(key, week);
+    return v >= r[0] && v <= r[1];
+  };
+  assert.ok(inRange('bpdMm', 30, 76));
+  assert.ok(!inRange('bpdMm', 30, 7.6)); // cm で入力した
+  assert.ok(!inRange('bpdMm', 30, 760)); // 桁の間違い
+  assert.ok(inRange('flMm', 20, 32));
+  assert.ok(inRange('acMm', 36, 310));
+  assert.ok(inRange('crlMm', 10, 31));
+  assert.ok(inRange('efwG', 40, 3125));
+  assert.ok(!inRange('efwG', 40, 312));
+  assert.equal(fetalMeasureRange('crlMm', 20), null); // CRL は妊娠初期だけ
+  assert.equal(fetalMeasureRange('bpdMm', 8), null);
+  // 目安の範囲は、入力できる上限・下限の内側にある
+  for (const key of Object.keys(FETAL_LIMITS)) {
+    for (let w = 6; w <= 42; w += 0.5) {
+      const r = fetalMeasureRange(key, w);
+      if (!r) continue;
+      assert.ok(r[0] >= FETAL_LIMITS[key].min && r[1] <= FETAL_LIMITS[key].max, `${key} ${w}週 ${r}`);
+    }
+  }
 });

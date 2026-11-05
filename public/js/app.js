@@ -9,7 +9,7 @@ import {
   buildTimeline, groupByPeriod, DAYS_PER_MONTH,
 } from './growth.js';
 import {
-  fetalEfwAt, FETAL_EFW_RANGE, FETAL_EFW_SOURCE, hasInfantStandard, infantPercentilesAt,
+  fetalEfwAt, FETAL_EFW_RANGE, FETAL_EFW_SOURCE, hasInfantStandard, infantPercentilesAt, fetalMeasureRange, FETAL_LIMITS,
   percentileBand, INFANT_SOURCE,
 } from './standards.js';
 import { lineChart, ticks } from './charts.js';
@@ -433,6 +433,46 @@ function renderGrowth() {
   return head + (fetalForm ? renderFetal() : renderInfant());
 }
 
+// 健診の記録の入力欄。入力できる範囲は FETAL_LIMITS、記録日の週数の目安を入力欄に薄く表示する
+function fetalField(key, label, rec) {
+  const { min, max, step } = FETAL_LIMITS[key];
+  const range = fetalRangeFor(key, rec.date || todayStr());
+  return field(key, label, rec[key], `min="${min}" max="${max}" step="${step}" placeholder="${range ? `目安 ${range[0]}〜${range[1]}` : ''}"`);
+}
+
+function fetalWeekOf(dateStr) {
+  const due = dueDate();
+  const d = parseDate(dateStr);
+  return due && d ? gestationalAge(due, d).totalDays / 7 : null;
+}
+
+function fetalRangeFor(key, dateStr) {
+  const w = fetalWeekOf(dateStr);
+  return w == null ? null : fetalMeasureRange(key, w);
+}
+
+// 健診日を変えたら目安の表示も変える
+function updateFetalPlaceholders(form) {
+  for (const key of Object.keys(FETAL_LIMITS)) {
+    const range = fetalRangeFor(key, form.date.value);
+    form[key].placeholder = range ? `目安 ${range[0]}〜${range[1]}` : '';
+  }
+}
+
+// 記録日の週数の目安から大きく外れた値（単位や桁の間違いの可能性）
+function fetalOutliers(form) {
+  const w = fetalWeekOf(form.date.value);
+  if (w == null) return [];
+  const labels = { efwG: ['推定体重', 'g'], bpdMm: ['BPD', 'mm'], flMm: ['FL', 'mm'], acMm: ['AC', 'mm'], crlMm: ['CRL', 'mm'], fhrBpm: ['心拍数', '回/分'] };
+  return Object.keys(FETAL_LIMITS).flatMap((key) => {
+    const v = num(form[key].value);
+    const range = fetalMeasureRange(key, w);
+    if (!(v > 0) || !range || (v >= range[0] && v <= range[1])) return [];
+    const [l, u] = labels[key];
+    return [`${l} ${v}${u}（目安 ${range[0]}〜${range[1]}${u}）`];
+  });
+}
+
 function field(name, label, value, attrs = '') {
   return `<label>${label}<input type="number" name="${name}" value="${value ?? ''}" inputmode="decimal" ${attrs}></label>`;
 }
@@ -468,12 +508,12 @@ function renderFetal() {
         <input type="hidden" name="id" value="${esc(rec.id || '')}">
         <label>健診日<input type="date" name="date" value="${esc(rec.date || todayStr())}" required></label>
         <div class="grid2">
-          ${field('efwG', '推定体重 EFW (g)', rec.efwG, 'min="1" max="6000" step="1"')}
-          ${field('bpdMm', '頭の横幅 BPD (mm)', rec.bpdMm, 'min="1" max="120" step="0.1"')}
-          ${field('flMm', '太ももの骨 FL (mm)', rec.flMm, 'min="1" max="100" step="0.1"')}
-          ${field('acMm', 'おなかの周り AC (mm)', rec.acMm, 'min="1" max="450" step="0.1"')}
-          ${field('crlMm', '頭殿長 CRL (mm)', rec.crlMm, 'min="1" max="120" step="0.1"')}
-          ${field('fhrBpm', '心拍数 (回/分)', rec.fhrBpm, 'min="30" max="250" step="1"')}
+          ${fetalField('efwG', '推定体重 EFW (g)', rec)}
+          ${fetalField('bpdMm', '頭の横幅 BPD (mm)', rec)}
+          ${fetalField('flMm', '太ももの骨 FL (mm)', rec)}
+          ${fetalField('acMm', 'おなかの周り AC (mm)', rec)}
+          ${fetalField('crlMm', '頭殿長 CRL (mm)', rec)}
+          ${fetalField('fhrBpm', '心拍数 (回/分)', rec)}
         </div>
         <label>メモ（任意）<textarea name="note" rows="2" maxlength="1000" placeholder="先生に言われたことなど">${esc(rec.note || '')}</textarea></label>
         <label>エコー写真（任意）<input type="file" name="photos" accept="image/*" multiple></label>
@@ -1811,6 +1851,10 @@ dialogs.viewer.addEventListener('touchend', (e) => {
 async function saveRecord(form, type, fields) {
   const date = form.date.value;
   if (!parseDate(date)) return;
+  if (type === 'fetalRecords') {
+    const out = fetalOutliers(form);
+    if (out.length && !confirm(`妊娠${Math.floor(fetalWeekOf(date))}週の目安から大きく外れている値があります。\n単位（mm・g）や桁を確認してください。\n\n${out.join('\n')}\n\nこのまま保存しますか？`)) return;
+  }
   const values = Object.fromEntries(fields.map(([k, d]) => [k, round(num(form[k].value), d)]));
   if (Object.values(values).every((v) => v == null || !(v > 0))) {
     toast('少なくとも1つの項目を入力してください');
@@ -2536,6 +2580,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', async (e) => {
   const el = e.target;
+  if (el.name === 'date' && el.form?.dataset.form === 'fetal') updateFetalPlaceholders(el.form);
   const { action } = el.dataset || {};
   if (action === 'check') {
     if (el.checked) state.checks[el.dataset.key] = true;

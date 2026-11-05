@@ -53,6 +53,42 @@ export function fetalEfwSd(week, grams) {
   return (grams - ref.mean) / ref.sd;
 }
 
+// ---------- 健診の計測値の入力チェック ----------
+// 入力ミス（単位・桁の間違い）に気づくための「目安の範囲」。診断のためのものではない。
+// 各週のおおよその平均値（教科書的な値）に対し、幅を広くとって判定する。
+// [妊娠週数, おおよその平均]（BPD・FL・AC・CRL は mm）
+const FETAL_MEASURE_TABLE = {
+  bpdMm: [[12, 20], [16, 35], [20, 48], [24, 60], [28, 71], [32, 80], [36, 87], [40, 92], [42, 94]],
+  flMm: [[13, 11], [16, 21], [20, 32], [24, 43], [28, 52], [32, 60], [36, 67], [40, 72], [42, 74]],
+  acMm: [[14, 80], [16, 110], [20, 150], [24, 195], [28, 235], [32, 275], [36, 305], [40, 335], [42, 345]],
+  crlMm: [[7, 10], [8, 16], [9, 23], [10, 31], [11, 41], [12, 52], [13, 65], [14, 80]],
+};
+const MEASURE_TOLERANCE = 0.35; // 平均の ±35%
+
+// 入力できる値の上限・下限（週数に関係なく、明らかな誤りだけを防ぐ）
+export const FETAL_LIMITS = {
+  efwG: { min: 10, max: 7000, step: 1 },
+  bpdMm: { min: 10, max: 130, step: 0.1 },
+  flMm: { min: 3, max: 110, step: 0.1 },
+  acMm: { min: 30, max: 500, step: 0.1 },
+  crlMm: { min: 2, max: 120, step: 0.1 },
+  fhrBpm: { min: 60, max: 220, step: 1 },
+};
+
+// 妊娠週数（小数可）における目安の範囲 [下限, 上限]。表の範囲外の週は null
+export function fetalMeasureRange(key, week) {
+  if (key === 'efwG') {
+    const ref = fetalEfwAt(week);
+    if (!ref) return null;
+    return [Math.max(FETAL_LIMITS.efwG.min, Math.round(ref.mean - 3 * ref.sd)), Math.round(ref.mean + 3 * ref.sd)];
+  }
+  if (key === 'fhrBpm') return week >= 6 ? [100, 190] : null;
+  const rows = FETAL_MEASURE_TABLE[key];
+  const mean = rows && interpolate(rows, week, (r) => r[1]);
+  if (mean == null) return null;
+  return [Math.round(mean * (1 - MEASURE_TOLERANCE)), Math.round(mean * (1 + MEASURE_TOLERANCE))];
+}
+
 // ---------- 出生後の発育曲線（パーセンタイル） ----------
 // 形式: INFANT_PERCENTILES[指標][性別] = [{ month, p: [3, 10, 25, 50, 75, 90, 97 パーセンタイル値] }, ...]
 //   指標: weight (kg) / length (cm) / head (cm)、性別: male / female
