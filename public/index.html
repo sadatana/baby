@@ -17,7 +17,7 @@
     <h1 class="app-title"><span class="logo" data-icon="logo"></span><span class="app-name">すくすくノート</span></h1>
     <button class="child-switch" id="child-switch" data-action="open-children" hidden aria-label="表示する子どもを切り替える"></button>
     <span class="header-actions">
-      <button class="icon-btn sync-status" id="sync-status" data-action="open-settings" hidden aria-label="家族共有の同期状態"></button>
+      <button class="icon-btn sync-status" id="sync-status" data-action="open-settings" data-page="family" hidden aria-label="家族共有の同期状態"></button>
       <button class="icon-btn" data-action="open-settings" aria-label="設定"><span data-icon="settings"></span></button>
     </span>
   </header>
@@ -32,53 +32,105 @@
     <button data-tab="lists"><span data-icon="checklist"></span>準備</button>
   </nav>
 
-  <dialog id="settings" class="sheet">
+  <dialog id="settings" class="sheet settings">
     <form id="settings-form" method="dialog">
-      <h2>設定</h2>
-      <section id="family-section" class="family"></section>
-      <div class="edit-only">
-      <h3>赤ちゃん</h3>
-      <label>ニックネーム・名前（任意）
-        <input type="text" name="babyName" maxlength="20" placeholder="例: まめちゃん">
-      </label>
-      <label>出産予定日
-        <input type="date" name="dueDate">
-      </label>
-      <p class="or">または</p>
-      <label>最終月経の開始日から計算
-        <input type="date" name="lmp">
-      </label>
-      <div class="actions wrap">
-        <button type="button" class="btn ghost" data-action="open-birth">誕生を登録・編集</button>
-        <button type="button" class="btn ghost" data-action="open-children">きょうだいを追加・切り替え</button>
+      <div class="settings-head">
+        <button type="button" class="icon-btn back" data-action="settings-back" aria-label="設定のメニューに戻る" hidden><span data-icon="chevronLeft"></span></button>
+        <h2 id="settings-title">設定</h2>
+        <button type="button" class="icon-btn" data-action="close-dialog" aria-label="閉じる"><span data-icon="close"></span></button>
       </div>
-      </div>
-      <h3>ママ</h3>
-      <div class="row2">
-        <label>身長 (cm)
-          <input type="number" name="heightCm" min="100" max="220" step="0.1" inputmode="decimal">
+
+      <nav class="settings-menu" data-page="menu" aria-label="設定のメニュー">
+        <button type="button" class="menu-row edit-only" data-action="settings-page" data-page="baby">
+          <span class="menu-icon" data-icon="baby"></span>
+          <span class="menu-body"><strong>赤ちゃん</strong><small id="menu-baby"></small></span>
+          <span class="menu-chev" data-icon="chevronRight"></span>
+        </button>
+        <button type="button" class="menu-row edit-only" data-action="settings-page" data-page="mom">
+          <span class="menu-icon" data-icon="mom"></span>
+          <span class="menu-body"><strong>ママ</strong><small id="menu-mom"></small></span>
+          <span class="menu-chev" data-icon="chevronRight"></span>
+        </button>
+        <button type="button" class="menu-row" data-action="settings-page" data-page="family">
+          <span class="menu-icon" data-icon="users"></span>
+          <span class="menu-body"><strong>家族と共有</strong><small id="menu-family"></small></span>
+          <span class="menu-chev" data-icon="chevronRight"></span>
+        </button>
+        <button type="button" class="menu-row" data-action="settings-page" data-page="data">
+          <span class="menu-icon" data-icon="download"></span>
+          <span class="menu-body"><strong>データの管理</strong><small id="menu-data"></small></span>
+          <span class="menu-chev" data-icon="chevronRight"></span>
+        </button>
+      </nav>
+
+      <section data-page="baby" hidden>
+        <label>ニックネーム・名前（任意）
+          <input type="text" name="babyName" maxlength="20" placeholder="例: まめちゃん">
         </label>
-        <label>妊娠前の体重 (kg)
-          <input type="number" name="preWeightKg" min="25" max="200" step="0.1" inputmode="decimal">
+        <label>出産予定日
+          <input type="date" name="dueDate">
         </label>
-      </div>
-      <div class="actions">
-        <button type="button" class="btn ghost" data-action="close-dialog">キャンセル</button>
-        <button type="submit" class="btn primary">保存</button>
-      </div>
-      <details class="data-tools">
-        <summary>データの管理</summary>
-        <p class="muted small">データはこの端末のブラウザ内にのみ保存されます。<span id="storage-usage"></span></p>
-        <p class="muted small">「すべてを ZIP で保存」は、記録と写真・動画（元の画質）を 1 つのファイルにまとめます。「バックアップを保存」は記録だけの小さなファイルです。</p>
-        <div class="actions wrap">
-          <button type="button" class="btn primary" data-action="export-zip">すべてを ZIP で保存</button>
-          <button type="button" class="btn ghost" data-action="export">バックアップを保存</button>
-          <label class="btn ghost file-btn" id="import-label">バックアップから復元
+        <p class="or">または</p>
+        <label>最終月経の開始日から計算
+          <input type="date" name="lmp">
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn primary">保存</button>
+        </div>
+        <h3>誕生・きょうだい</h3>
+        <div class="settings-links">
+          <button type="button" class="menu-row" data-action="open-birth">
+            <span class="menu-icon" data-icon="gift"></span>
+            <span class="menu-body"><strong>誕生を登録・編集</strong><small>生年月日・性別・生まれたときの大きさ</small></span>
+            <span class="menu-chev" data-icon="chevronRight"></span>
+          </button>
+          <button type="button" class="menu-row" data-action="open-children">
+            <span class="menu-icon" data-icon="users"></span>
+            <span class="menu-body"><strong>きょうだいを追加・切り替え</strong><small>ふたり目以降の子どもの記録</small></span>
+            <span class="menu-chev" data-icon="chevronRight"></span>
+          </button>
+        </div>
+      </section>
+
+      <section data-page="mom" hidden>
+        <p class="muted small">体重記録の「増加の目安」の計算に使います。</p>
+        <div class="row2">
+          <label>身長 (cm)
+            <input type="number" name="heightCm" min="100" max="220" step="0.1" inputmode="decimal">
+          </label>
+          <label>妊娠前の体重 (kg)
+            <input type="number" name="preWeightKg" min="25" max="200" step="0.1" inputmode="decimal">
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn primary">保存</button>
+        </div>
+      </section>
+
+      <section data-page="family" hidden>
+        <section id="family-section" class="family"></section>
+      </section>
+
+      <section data-page="data" class="data-tools" hidden>
+        <p class="muted small">記録と写真はこの端末のブラウザ内に保存されています。<span id="storage-usage"></span></p>
+        <div class="settings-links">
+          <button type="button" class="menu-row" data-action="export-zip">
+            <span class="menu-icon" data-icon="download"></span>
+            <span class="menu-body"><strong>すべてを ZIP で保存</strong><small>記録と写真・動画（元の画質）を 1 つのファイルに</small></span>
+          </button>
+          <button type="button" class="menu-row" data-action="export">
+            <span class="menu-icon" data-icon="document"></span>
+            <span class="menu-body"><strong>バックアップを保存</strong><small>記録だけの小さなファイル（写真は含みません）</small></span>
+          </button>
+          <label class="menu-row" id="import-label">
+            <span class="menu-icon" data-icon="sync"></span>
+            <span class="menu-body"><strong>バックアップから復元</strong><small>今の記録は置き換わります</small></span>
             <input type="file" accept="application/json" data-action="import" hidden>
           </label>
-          <button type="button" class="btn danger" data-action="reset">すべてのデータを削除</button>
         </div>
-      </details>
+        <h3>削除</h3>
+        <button type="button" class="btn danger" data-action="reset">すべてのデータを削除</button>
+      </section>
     </form>
   </dialog>
 
@@ -133,9 +185,12 @@
       <label>メモ（任意）
         <textarea name="note" rows="3" maxlength="1000"></textarea>
       </label>
-      <label>写真（任意）
-        <input type="file" name="photos" accept="image/*" multiple>
-      </label>
+      <div class="photo-pick">
+        <label class="btn ghost pick-btn"><span data-icon="camera"></span>写真・動画を追加
+          <input type="file" name="photos" accept="image/*,video/*" multiple hidden data-action="pick-preview">
+        </label>
+        <div class="pick-preview" aria-live="polite"></div>
+      </div>
       <div class="actions">
         <button type="button" class="btn danger edit-only" data-action="delete-milestone" id="delete-milestone">削除</button>
         <button type="button" class="btn ghost" data-action="close-dialog">閉じる</button>
