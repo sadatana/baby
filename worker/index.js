@@ -19,7 +19,7 @@ const SYNC_PAGE = 500;
 const ROLES = ['admin', 'editor', 'viewer'];
 
 // 記録の種類
-const BABY_TYPES = new Set(['child', 'fetal', 'growth', 'milestone', 'media']);
+const BABY_TYPES = new Set(['child', 'fetal', 'growth', 'milestone', 'media', 'appointment']);
 const MOM_TYPES = { weight: 'weight', journal: 'journal', contraction: 'labor', kick: 'labor' }; // 種類 → 共有設定の項目
 const SOCIAL_TYPES = new Set(['reaction', 'comment']);
 const SELF_TYPES = new Set(['prefs', 'share']); // id = 本人のユーザー ID
@@ -27,7 +27,7 @@ const ALL_TYPES = new Set([...BABY_TYPES, ...Object.keys(MOM_TYPES), ...SOCIAL_T
 const ID_RE = /^[A-Za-z0-9._:-]{1,100}$/;
 // 家族に通知する記録の種類と、通知の文言
 const NOTIFY_LABELS = {
-  fetal: '健診の記録', growth: '身長・体重の記録', milestone: 'できごと', media: '写真・動画', comment: 'コメント', child: '赤ちゃんの情報',
+  appointment: '健診の予定', fetal: '健診の記録', growth: '身長・体重の記録', milestone: 'できごと', media: '写真・動画', comment: 'コメント', child: '赤ちゃんの情報',
 };
 const NOTIFY_INTERVAL = 10 * 60 * 1000; // 同じ端末への通知は 10 分に 1 回まで
 

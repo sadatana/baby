@@ -8,6 +8,7 @@ export const COLLECTIONS = {
   fetalRecords: 'fetal',
   growthRecords: 'growth',
   milestones: 'milestone',
+  appointments: 'appointment',
   media: 'media',
   weights: 'weight',
   journal: 'journal',
@@ -20,7 +21,7 @@ export const COLLECTIONS = {
 const TYPE_TO_COLLECTION = Object.fromEntries(Object.entries(COLLECTIONS).map(([k, v]) => [v, k]));
 export const MOM_TYPES = new Set(['weight', 'journal', 'contraction', 'kick']);
 const SOCIAL_TYPES = new Set(['reaction', 'comment']);
-const BABY_TYPES = new Set(['child', 'fetal', 'growth', 'milestone', 'media']);
+const BABY_TYPES = new Set(['child', 'fetal', 'growth', 'milestone', 'media', 'appointment']);
 const META = ['ownerId', 'createdBy', 'updatedBy'];
 
 // 文字列の短いハッシュ（FNV-1a）

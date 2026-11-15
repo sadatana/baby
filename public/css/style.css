@@ -847,3 +847,123 @@ body[data-role="viewer"] .edit-only { display: none !important; }
 .play-mark .icon { width: 14px; height: 14px; fill: currentColor; }
 .viewer-body video { max-width: 100%; max-height: 100%; }
 .push-row .toggle { margin-top: 2px; }
+
+/* ---------- 設定のメニュー ---------- */
+dialog.settings { padding: 0; }
+dialog.settings form { padding: 0 20px 22px; max-height: 88vh; overflow-y: auto; }
+.settings-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  margin: 0 -20px 12px;
+  padding: 12px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.settings-head h2 { justify-content: center; margin: 0; font-size: 1rem; }
+.settings-head .back[hidden] { display: block !important; visibility: hidden; }
+.settings-menu, .settings-links { display: flex; flex-direction: column; gap: 8px; }
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  margin: 0;
+}
+.menu-row:hover { background: var(--surface-2); }
+.menu-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); flex-shrink: 0; }
+.menu-icon .icon { width: 20px; height: 20px; }
+.menu-body { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.menu-body strong { font-size: 0.95rem; }
+.menu-body small { color: var(--muted); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-chev { color: var(--faint); }
+.menu-chev .icon { width: 18px; height: 18px; }
+dialog.settings .family { border-bottom: none; padding-bottom: 0; }
+dialog.settings .data-tools { margin-top: 0; border-top: none; padding-top: 0; }
+
+/* ---------- 入力をらくに ---------- */
+.prev { display: block; font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+.more-fields > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 2px 0;
+}
+.more-fields > summary::before { content: '+'; font-weight: 700; }
+.more-fields[open] > summary::before { content: '−'; }
+.more-fields[open] > summary { margin-bottom: 10px; }
+.photo-pick { display: flex; flex-direction: column; gap: 8px; }
+.pick-btn { align-self: flex-start; cursor: pointer; }
+.pick-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pick-preview:empty { display: none; }
+.pick-thumb { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; background: var(--surface-2); display: inline-grid; place-items: center; color: var(--muted); }
+.pick-thumb .icon { width: 20px; height: 20px; fill: currentColor; }
+.pick-count { font-size: 0.82rem; color: var(--muted); }
+
+/* ---------- アルバムの操作 ---------- */
+.photo-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.photo-tools .chips-row { margin: 0; }
+.photo-tools select { padding: 6px 10px; font-size: 0.85rem; }
+.photo-tools .btn { margin-left: auto; }
+.photo.selected img { opacity: 0.55; }
+.photo.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+.pick-mark {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.pick-mark .icon { width: 16px; height: 16px; stroke-width: 2.5; }
+.select-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--tabbar-h) + 10px + env(safe-area-inset-bottom));
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(calc(100vw - 24px), 600px);
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  font-size: 0.85rem;
+}
+.select-bar span { flex: 1; font-weight: 600; }
+.select-bar .btn .icon { width: 15px; height: 15px; }
+.viewer-body.zoomed { overflow: auto; display: block; touch-action: pan-x pan-y; }
+.viewer-body.zoomed img { max-width: none; max-height: none; width: 250%; }
+.viewer-body.zoomed .nav { display: none; }
+.viewer-body img { touch-action: manipulation; cursor: zoom-in; }
+.viewer-body.zoomed img { cursor: zoom-out; }
+body:has(.select-bar) .toast { bottom: calc(var(--tabbar-h) + 80px + env(safe-area-inset-bottom)); }
+
+/* ---------- 健診・通院の予定 ---------- */
+.schedule li { display: flex; align-items: center; gap: 8px; }
+.schedule label { flex: 1; min-width: 0; }
+.schedule .when { font-variant-numeric: tabular-nums; }
+.schedule .when.set { color: var(--accent-strong); font-weight: 600; }
+.schedule li.done .when.set { color: var(--muted); font-weight: 400; }
+.schedule .btn { flex-shrink: 0; white-space: nowrap; }

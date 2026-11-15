@@ -35,6 +35,7 @@ export function defaultState() {
     fetalRecords: [], // { efwG, bpdMm, flMm, acMm, crlMm, fhrBpm, note, photoIds }
     growthRecords: [], // { heightCm, weightKg, headCm, chestCm, note, photoIds }
     milestones: [], // { templateId, title, note, photoIds }
+    appointments: [], // 健診・通院の予定 { title, time: 'HH:MM'|'', note, slot: 妊婦健診の週|null, done }
     media: [], // { id, childId, takenAt: 'YYYY-MM-DD', caption, width, height, createdAt, updatedAt }
     deleted: [], // 削除の記録 { type, id, at }（将来の同期で使う）
     // ママの記録（家族共有時は ownerId で記録した人を区別する）
@@ -79,6 +80,7 @@ export function mergeState(raw) {
     fetalRecords: arr(raw.fetalRecords),
     growthRecords: arr(raw.growthRecords),
     milestones: arr(raw.milestones),
+    appointments: arr(raw.appointments),
     media: arr(raw.media),
     deleted: arr(raw.deleted),
     weights: withIds(raw.weights),

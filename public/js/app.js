@@ -1,15 +1,15 @@
 import {
   parseDate, formatDate, formatDateJa, today, addDays, diffDays,
-  dueDateFromLmp, gestationalAge, checkupSchedule, nextCheckup,
+  dueDateFromLmp, gestationalAge, checkupSchedule,
   contractionStats, formatDuration, weightGainGuide,
 } from './pregnancy.js';
 import { weekInfo, HOSPITAL_BAG, PROCEDURES, FOOD_NOTES, WARNING_SIGNS } from './data.js';
 import {
   uuid, ageOf, formatAge, isBorn, periodOf, gestAtBirth, MILESTONE_TEMPLATES, milestoneTemplate, photoMonthOf, photoMonthLabel,
-  buildTimeline, groupByPeriod, DAYS_PER_MONTH,
+  buildTimeline, groupByPeriod, DAYS_PER_MONTH, mergeSchedule, nextScheduled,
 } from './growth.js';
 import {
-  fetalEfwAt, FETAL_EFW_RANGE, FETAL_EFW_SOURCE, hasInfantStandard, infantPercentilesAt,
+  fetalEfwAt, FETAL_EFW_RANGE, FETAL_EFW_SOURCE, hasInfantStandard, infantPercentilesAt, fetalMeasureRange, FETAL_LIMITS,
   percentileBand, INFANT_SOURCE,
 } from './standards.js';
 import { lineChart, ticks } from './charts.js';
@@ -34,6 +34,10 @@ const ui = {
   momOwner: null, // ママタブで表示する人（null: 自動 / 'me' / ユーザー ID）
   editing: null, // { type, id } 計測記録の編集中
   openComments: new Set(), // コメント欄を開いている記録
+  photoKind: 'all', // アルバムの写真の絞り込み: all | photo | video
+  photoMonth: '', // 'YYYY-MM'（空ならすべて）
+  selecting: false, // 写真をまとめて選んでいる
+  selected: new Set(),
 };
 
 const view = document.getElementById('view');
@@ -41,6 +45,7 @@ const dialogs = {
   settings: document.getElementById('settings'),
   birth: document.getElementById('birth'),
   milestone: document.getElementById('milestone'),
+  appt: document.getElementById('appt'),
   children: document.getElementById('children'),
   viewer: document.getElementById('viewer'),
 };
@@ -196,7 +201,11 @@ function photoStrip(ids = []) {
 function photoThumb(id) {
   const m = state.media.find((x) => x.id === id);
   const video = isVideo(m);
-  return `<button class="photo ${video ? 'video' : ''}" data-action="open-photo" data-id="${esc(id)}" aria-label="${video ? '動画' : '写真'}を開く">
+  const sel = ui.selecting && currentTab === 'album' && ui.albumView === 'photos';
+  const picked = sel && ui.selected.has(id);
+  return `<button class="photo ${video ? 'video' : ''} ${picked ? 'selected' : ''}" data-action="open-photo" data-id="${esc(id)}"
+    aria-label="${video ? '動画' : '写真'}を${sel ? '選択' : '開く'}" ${sel ? `aria-pressed="${picked}"` : ''}>
+    ${picked ? `<span class="pick-mark">${icon('check')}</span>` : ''}
     <img data-media-id="${esc(id)}" alt="" loading="lazy">
     ${video ? `<span class="play-mark">${icon('play')}${m.duration ? `<span>${Math.round(m.duration)}秒</span>` : ''}</span>` : ''}</button>`;
 }
@@ -275,7 +284,7 @@ function renderHome() {
         <div class="welcome-mark">${icon('baby')}</div>
         <h2>ご妊娠おめでとうございます</h2>
         <p>出産予定日（または最終月経の開始日）を設定すると、妊娠週数や赤ちゃんの成長、健診スケジュールを確認できます。</p>
-        <button class="btn primary" data-action="open-settings">予定日を設定する</button>
+        <button class="btn primary" data-action="open-settings" data-page="baby">予定日を設定する</button>
       </section>
       ${renderQuickActions()}
       ${renderWarningCard()}`;
@@ -284,7 +293,7 @@ function renderHome() {
   const t = today();
   const ga = gestationalAge(due, t);
   const info = weekInfo(ga.week);
-  const next = nextCheckup(due, t);
+  const next = nextScheduled(scheduleRows(), todayStr());
   const pct = Math.round(ga.progress * 100);
   const lastFetal = mine(state.fetalRecords).sort(byDateDesc)[0];
 
@@ -335,12 +344,7 @@ function renderHome() {
       <p>${esc(info.tip)}</p>
     </section>
 
-    ${next ? `
-    <section class="card">
-      <h3>${icon('hospital')}次の妊婦健診（目安）</h3>
-      <p><strong>${formatDateJa(next.date)}</strong>（${next.week}週）</p>
-      <p class="muted small">${diffDays(next.date, t) === 0 ? '今日です' : `あと${diffDays(next.date, t)}日`}・実際の日程は産院の指示に従ってください</p>
-    </section>` : ''}
+    ${nextApptCard(next)}
 
     ${renderWarningCard()}`;
 }
@@ -375,6 +379,8 @@ function renderBabyHome() {
       <p>${esc(latest.date)}（${esc(periodLabel(latest.date))}）</p>
       <p>${growthValues(latest)}</p>
     </section>` : ''}
+
+    ${nextApptCard(nextScheduled(scheduleRows(), todayStr()))}
 
     ${events.length ? `
     <section class="card">
@@ -414,6 +420,113 @@ function sizeVisual(week) {
   return `<div class="size-visual" aria-hidden="true"><span style="width:${d}px;height:${d}px"></span></div>`;
 }
 
+// ---------- 健診・通院の予定 ----------
+
+// 妊娠中は標準の妊婦健診（目安）に自分で入れた日付を重ねる。生まれてからは自分で入れた予定だけ
+function scheduleRows() {
+  const due = dueDate();
+  const standard = due && !isBorn(child()) ? checkupSchedule(due) : [];
+  return mergeSchedule(standard, mine(state.appointments), state.checkups);
+}
+
+const rowDate = (r) => (r.date ? parseDate(r.date) : r.estimate);
+// 「11月18日(水)」。今年でなければ年も付ける
+function shortDateJa(d) {
+  const w = ['日', '月', '火', '水', '木', '金', '土'][d.getUTCDay()];
+  const y = d.getUTCFullYear() === today().getUTCFullYear() ? '' : `${d.getUTCFullYear()}年`;
+  return `${y}${d.getUTCMonth() + 1}月${d.getUTCDate()}日(${w})`;
+}
+
+function nextApptCard(next) {
+  if (!next) return '';
+  const d = rowDate(next);
+  const days = diffDays(d, today());
+  return `
+    <section class="card link-card" data-action="goto-tab" data-tab="lists">
+      <h3>${icon('hospital')}次の予定${next.date ? '' : '（目安）'}</h3>
+      <p><strong>${formatDateJa(d)}${next.time ? ` ${esc(next.time)}` : ''}</strong>${next.date ? '' : 'ごろ'}</p>
+      <p>${esc(next.title)}${next.slot != null ? `・${next.slot}週` : ''}</p>
+      ${next.note ? `<p class="note">${esc(next.note)}</p>` : ''}
+      <p class="muted small">${days === 0 ? '今日です' : `あと${days}日`}${next.date ? '' : '・予約した日を「準備」タブで設定できます'}</p>
+    </section>`;
+}
+
+function renderSchedule() {
+  const rows = scheduleRows();
+  const t = todayStr();
+  const born = isBorn(child());
+  return `
+    <section class="card">
+      <details open>
+        <summary><h2>${icon('hospital')}健診・通院の予定</h2></summary>
+        ${born ? '' : (dueDate()
+    ? '<p class="muted small">日付が薄い色のものは標準的な間隔からの目安です。予約した日を入れると、その日付で表示されます。</p>'
+    : '<p class="muted small">出産予定日を設定すると、妊婦健診の目安が表示されます。</p>')}
+        ${rows.length ? `<ul class="checklist schedule">
+          ${rows.map((r) => {
+    const d = rowDate(r);
+    const past = formatDate(d) < t;
+    const check = r.slot != null
+      ? `data-action="checkup" data-week="${r.slot}"` : `data-action="appt-done" data-id="${esc(r.appointment.id)}"`;
+    return `<li class="${r.done ? 'done' : ''} ${past && !r.done ? 'past' : ''}">
+              <label>
+                <input type="checkbox" ${check} ${r.done ? 'checked' : ''} ${canEdit() || r.slot != null ? '' : 'disabled'} aria-label="${esc(r.title)}を済みにする">
+                <span>${esc(r.title)}${r.slot != null ? ` <span class="muted small">${r.slot}週</span>` : ''}
+                  <small class="${r.date ? 'when set' : 'when muted'}">${shortDateJa(d)}${r.date ? (r.time ? ` ${esc(r.time)}` : '') : 'ごろ'}</small>
+                  ${r.note ? `<small class="muted">${esc(r.note)}</small>` : ''}</span>
+              </label>
+              <button class="btn ghost tiny edit-only" data-action="edit-appt" data-key="${esc(r.key)}" aria-label="${esc(r.title)}の日付を${r.date ? '変更' : '設定'}">${r.date ? '変更' : '設定'}</button>
+            </li>`;
+  }).join('')}
+        </ul>` : '<p class="muted">予定はまだありません。</p>'}
+        <button class="btn ghost small edit-only" data-action="new-appt">${icon('plus')}予定を追加</button>
+      </details>
+    </section>`;
+}
+
+const apptForm = document.getElementById('appt-form');
+
+function openAppt(key) {
+  const row = key ? scheduleRows().find((r) => r.key === key) : null;
+  const a = row?.appointment;
+  apptForm.reset();
+  apptForm.id.value = a?.id || '';
+  apptForm.slot.value = row?.slot ?? '';
+  apptForm.title.value = row ? row.title : (isBorn(child()) ? '' : '妊婦健診');
+  apptForm.date.value = a?.date || (row ? formatDate(row.estimate) : todayStr());
+  apptForm.time.value = a?.time || '';
+  apptForm.note.value = a?.note || '';
+  document.getElementById('appt-title').textContent = row ? (a ? '予定を変更' : '日付を設定') : '予定を追加';
+  document.getElementById('appt-hint').textContent = row?.slot != null
+    ? `目安は ${formatDateJa(row.estimate)}ごろ（${row.slot}週）です。予約した日を入れてください。` : '';
+  const del = document.getElementById('delete-appt');
+  del.hidden = !a;
+  del.textContent = row?.slot != null ? '目安に戻す' : '削除';
+  apptForm.querySelectorAll('input, textarea').forEach((i) => { i.disabled = !canEdit(); });
+  dialogs.appt.showModal();
+}
+
+apptForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const date = apptForm.date.value;
+  const title = apptForm.title.value.trim();
+  if (!parseDate(date) || !title) return;
+  const slot = apptForm.slot.value === '' ? null : Number(apptForm.slot.value);
+  const existing = state.appointments.find((x) => x.id === apptForm.id.value);
+  store.upsert(state.appointments, {
+    ...(existing ? { id: existing.id } : { childId: child().id, done: false }),
+    date,
+    time: apptForm.time.value || '',
+    title,
+    note: apptForm.note.value.trim(),
+    slot,
+  });
+  persist();
+  dialogs.appt.close();
+  render();
+  toast('予定を保存しました');
+});
+
 function renderWarningCard() {
   return `
     <section class="card warning">
@@ -431,6 +544,99 @@ function renderGrowth() {
   // 出生後でも、妊娠中の記録を編集するときは健診の記録フォームを表示する
   const fetalForm = !isBorn(child()) || ui.editing?.type === 'fetalRecords';
   return head + (fetalForm ? renderFetal() : renderInfant());
+}
+
+// 健診の記録の入力欄。入力できる範囲は FETAL_LIMITS、記録日の週数の目安を入力欄に薄く表示する
+const FETAL_LABELS = {
+  efwG: ['推定体重 EFW (g)', 'g'], bpdMm: ['頭の横幅 BPD (mm)', 'mm'], flMm: ['太ももの骨 FL (mm)', 'mm'],
+  acMm: ['おなかの周り AC (mm)', 'mm'], crlMm: ['頭殿長 CRL (mm)', 'mm'], fhrBpm: ['心拍数 (回/分)', '回/分'],
+};
+
+function fetalField(key, rec) {
+  const { min, max, step } = FETAL_LIMITS[key];
+  const range = fetalRangeFor(key, rec.date || todayStr());
+  const [label, unit] = FETAL_LABELS[key];
+  return field(key, `${label}${prevHint('fetalRecords', key, unit, rec)}`, rec[key],
+    `min="${min}" max="${max}" step="${step}" placeholder="${range ? `目安 ${range[0]}〜${range[1]}` : ''}"`);
+}
+
+// 妊娠初期（14週未満）は CRL・心拍数、それ以降は推定体重・BPD・FL・AC を先に出し、残りは折りたたむ
+function fetalFieldGroups(rec) {
+  const w = fetalWeekOf(rec.date || todayStr());
+  const early = w != null && w < 14;
+  const main = early ? ['crlMm', 'fhrBpm'] : ['efwG', 'bpdMm', 'flMm', 'acMm'];
+  const more = Object.keys(FETAL_LIMITS).filter((k) => !main.includes(k));
+  const open = more.some((k) => rec[k] != null);
+  return `
+    <div class="grid2">${main.map((k) => fetalField(k, rec)).join('')}</div>
+    <details class="more-fields" ${open ? 'open' : ''}>
+      <summary>${early ? '推定体重・BPD などを記録する' : 'CRL・心拍数を記録する'}</summary>
+      <div class="grid2">${more.map((k) => fetalField(k, rec)).join('')}</div>
+    </details>`;
+}
+
+// 前回の記録の値（入力の参考に）
+function prevHint(type, key, unit, rec) {
+  const prev = mine(state[type]).filter((r) => r[key] != null && r.id !== rec.id && (!rec.date || r.date < rec.date))
+    .sort(byDateDesc)[0];
+  if (!prev) return '';
+  const [, m, d] = prev.date.split('-').map(Number);
+  return `<small class="prev">前回 ${esc(prev[key])}${unit}（${m}/${d}）</small>`;
+}
+
+// 写真・動画の選択ボタンと、選んだもののプレビュー
+function photoPicker(label) {
+  return `<div class="photo-pick">
+    <label class="btn ghost pick-btn">${icon('camera')}${label}
+      <input type="file" name="photos" accept="image/*,video/*" multiple hidden data-action="pick-preview">
+    </label>
+    <div class="pick-preview" aria-live="polite"></div>
+  </div>`;
+}
+
+function updatePickPreview(input) {
+  const box = input.closest('.photo-pick').querySelector('.pick-preview');
+  box.querySelectorAll('img').forEach((img) => URL.revokeObjectURL(img.src));
+  const files = [...input.files];
+  box.innerHTML = files.length ? `
+    ${files.slice(0, 8).map((f) => (f.type.startsWith('video/')
+    ? `<span class="pick-thumb video">${icon('play')}</span>`
+    : `<img class="pick-thumb" src="${URL.createObjectURL(f)}" alt="">`)).join('')}
+    <span class="pick-count">${files.length}件を選択</span>
+    <button type="button" class="icon-btn small" data-action="pick-clear" aria-label="選択を取り消す">${icon('close')}</button>` : '';
+}
+
+function fetalWeekOf(dateStr) {
+  const due = dueDate();
+  const d = parseDate(dateStr);
+  return due && d ? gestationalAge(due, d).totalDays / 7 : null;
+}
+
+function fetalRangeFor(key, dateStr) {
+  const w = fetalWeekOf(dateStr);
+  return w == null ? null : fetalMeasureRange(key, w);
+}
+
+// 健診日を変えたら目安の表示も変える
+function updateFetalPlaceholders(form) {
+  for (const key of Object.keys(FETAL_LIMITS)) {
+    const range = fetalRangeFor(key, form.date.value);
+    form[key].placeholder = range ? `目安 ${range[0]}〜${range[1]}` : '';
+  }
+}
+
+// 記録日の週数の目安から大きく外れた値（単位や桁の間違いの可能性）
+function fetalOutliers(form) {
+  const w = fetalWeekOf(form.date.value);
+  if (w == null) return [];
+  const labels = { efwG: ['推定体重', 'g'], bpdMm: ['BPD', 'mm'], flMm: ['FL', 'mm'], acMm: ['AC', 'mm'], crlMm: ['CRL', 'mm'], fhrBpm: ['心拍数', '回/分'] };
+  return Object.keys(FETAL_LIMITS).flatMap((key) => {
+    const v = num(form[key].value);
+    const range = fetalMeasureRange(key, w);
+    if (!(v > 0) || !range || (v >= range[0] && v <= range[1])) return [];
+    const [l, u] = labels[key];
+    return [`${l} ${v}${u}（目安 ${range[0]}〜${range[1]}${u}）`];
+  });
 }
 
 function field(name, label, value, attrs = '') {
@@ -467,16 +673,9 @@ function renderFetal() {
       <form data-form="fetal" class="record-form">
         <input type="hidden" name="id" value="${esc(rec.id || '')}">
         <label>健診日<input type="date" name="date" value="${esc(rec.date || todayStr())}" required></label>
-        <div class="grid2">
-          ${field('efwG', '推定体重 EFW (g)', rec.efwG, 'min="1" max="6000" step="1"')}
-          ${field('bpdMm', '頭の横幅 BPD (mm)', rec.bpdMm, 'min="1" max="120" step="0.1"')}
-          ${field('flMm', '太ももの骨 FL (mm)', rec.flMm, 'min="1" max="100" step="0.1"')}
-          ${field('acMm', 'おなかの周り AC (mm)', rec.acMm, 'min="1" max="450" step="0.1"')}
-          ${field('crlMm', '頭殿長 CRL (mm)', rec.crlMm, 'min="1" max="120" step="0.1"')}
-          ${field('fhrBpm', '心拍数 (回/分)', rec.fhrBpm, 'min="30" max="250" step="1"')}
-        </div>
+        ${fetalFieldGroups(rec)}
         <label>メモ（任意）<textarea name="note" rows="2" maxlength="1000" placeholder="先生に言われたことなど">${esc(rec.note || '')}</textarea></label>
-        <label>エコー写真（任意）<input type="file" name="photos" accept="image/*" multiple></label>
+        ${photoPicker('エコー写真を追加')}
         ${rec.id ? photoStrip(rec.photoIds) : ''}
         <div class="actions">
           ${rec.id ? '<button type="button" class="btn ghost" data-action="cancel-edit">やめる</button>' : ''}
@@ -611,13 +810,18 @@ function renderInfant() {
         <input type="hidden" name="id" value="${esc(rec.id || '')}">
         <label>測った日<input type="date" name="date" value="${esc(rec.date || todayStr())}" required></label>
         <div class="grid2">
-          ${field('weightKg', '体重 (kg)', rec.weightKg, 'min="0.3" max="40" step="0.001" placeholder="例: 5.42"')}
-          ${field('heightCm', '身長 (cm)', rec.heightCm, 'min="20" max="130" step="0.1"')}
-          ${field('headCm', '頭囲 (cm)', rec.headCm, 'min="15" max="60" step="0.1"')}
-          ${field('chestCm', '胸囲 (cm)', rec.chestCm, 'min="15" max="80" step="0.1"')}
+          ${field('weightKg', `体重 (kg)${prevHint('growthRecords', 'weightKg', 'kg', rec)}`, rec.weightKg, 'min="0.3" max="40" step="0.001" placeholder="例: 5.42"')}
+          ${field('heightCm', `身長 (cm)${prevHint('growthRecords', 'heightCm', 'cm', rec)}`, rec.heightCm, 'min="20" max="130" step="0.1"')}
         </div>
+        <details class="more-fields" ${rec.headCm != null || rec.chestCm != null ? 'open' : ''}>
+          <summary>頭囲・胸囲も記録する</summary>
+          <div class="grid2">
+            ${field('headCm', `頭囲 (cm)${prevHint('growthRecords', 'headCm', 'cm', rec)}`, rec.headCm, 'min="15" max="60" step="0.1"')}
+            ${field('chestCm', `胸囲 (cm)${prevHint('growthRecords', 'chestCm', 'cm', rec)}`, rec.chestCm, 'min="15" max="80" step="0.1"')}
+          </div>
+        </details>
         <label>メモ（任意）<textarea name="note" rows="2" maxlength="1000" placeholder="1ヶ月健診など">${esc(rec.note || '')}</textarea></label>
-        <label>写真（任意）<input type="file" name="photos" accept="image/*" multiple></label>
+        ${photoPicker('写真・動画を追加')}
         ${rec.id ? photoStrip(rec.photoIds) : ''}
         <div class="actions">
           ${rec.id ? '<button type="button" class="btn ghost" data-action="cancel-edit">やめる</button>' : ''}
@@ -946,16 +1150,71 @@ function albumPhotos() {
 }
 
 function renderPhotos() {
-  const photos = albumPhotos();
-  if (!photos.length) {
+  const all = albumPhotos();
+  if (!all.length) {
     return '<section class="card"><p class="muted">写真はまだありません。エコー写真やおなかの写真、生まれてからの写真を追加しましょう。</p></section>';
   }
+  const months = [...new Set(all.map((m) => m.takenAt.slice(0, 7)))];
+  if (ui.photoMonth && !months.includes(ui.photoMonth)) ui.photoMonth = '';
+  const photos = all.filter((m) => (ui.photoKind === 'all' || (ui.photoKind === 'video') === isVideo(m))
+    && (!ui.photoMonth || m.takenAt.startsWith(ui.photoMonth)));
+  const hasVideo = all.some(isVideo);
+  const toolbar = `
+    <div class="photo-tools">
+      ${hasVideo ? chips('photoKind', ui.photoKind, [['all', 'すべて'], ['photo', '写真'], ['video', '動画']]) : ''}
+      <select data-action="photo-month" aria-label="撮影した月で絞り込む">
+        <option value="">すべての月</option>
+        ${months.map((m) => `<option value="${m}" ${m === ui.photoMonth ? 'selected' : ''}>${Number(m.slice(0, 4))}年${Number(m.slice(5))}月</option>`).join('')}
+      </select>
+      <button class="btn ghost tiny" data-action="toggle-select">${ui.selecting ? 'やめる' : '選択'}</button>
+    </div>`;
   const groups = groupByPeriod(child(), photos.map((m) => ({ date: m.takenAt, media: m })));
-  return groups.map((g) => `
+  const list = groups.length ? groups.map((g) => `
     <section class="tl-group">
-      <h3 class="tl-head">${esc(g.label)} <span class="muted small">${g.items.length}枚</span></h3>
+      <h3 class="tl-head">${esc(g.label)} <span class="muted small">${g.items.length}件</span></h3>
       <div class="photo-grid">${g.items.map((i) => photoThumb(i.media.id)).join('')}</div>
-    </section>`).join('');
+    </section>`).join('') : '<p class="muted">条件に合う写真・動画はありません。</p>';
+  const bar = ui.selecting ? `
+    <div class="select-bar">
+      <span>${ui.selected.size}件を選択</span>
+      <button class="btn ghost tiny" data-action="select-all">すべて選択</button>
+      <button class="btn primary tiny" data-action="save-selected" ${ui.selected.size ? '' : 'disabled'}>${icon('download')}保存</button>
+      <button class="btn danger tiny edit-only" data-action="delete-selected" ${ui.selected.size ? '' : 'disabled'}>${icon('trash')}削除</button>
+    </div>` : '';
+  return toolbar + list + bar;
+}
+
+// 選んだ写真・動画を保存（1 件ならそのまま、複数なら ZIP にまとめる）
+async function saveSelected() {
+  const items = state.media.filter((m) => ui.selected.has(m.id)).sort((a, b) => a.takenAt.localeCompare(b.takenAt));
+  if (!items.length || busy) return;
+  busy = true;
+  try {
+    const files = [];
+    for (let i = 0; i < items.length; i++) {
+      toast(`準備しています… (${i + 1}/${items.length})`, 0);
+      const m = items[i];
+      const blob = await media.getBlob(m.id, 'full');
+      if (!blob) continue;
+      const ext = isVideo(m) ? ({ 'video/quicktime': 'mov', 'video/webm': 'webm' }[blob.type] || 'mp4') : 'jpg';
+      files.push({ name: `${m.takenAt}_${String(m.id).slice(0, 8)}.${ext}`, data: blob, date: new Date(m.createdAt || Date.now()) });
+    }
+    if (!files.length) throw new Error('none');
+    const out = files.length === 1 ? files[0].data : await createZip(files);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(out);
+    a.download = files.length === 1 ? `sukusuku-${files[0].name}` : `sukusuku-photos-${todayStr()}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60 * 1000);
+    toast(`${files.length}件を保存しました`);
+    ui.selecting = false;
+    ui.selected.clear();
+    render();
+  } catch {
+    toast('保存できませんでした', 4000);
+  } finally {
+    busy = false;
+  }
 }
 
 // 月齢フォト: 月ごとに 1 枚ずつ並べて成長を見比べる
@@ -1267,31 +1526,11 @@ function progressText(keys) {
 }
 
 function renderLists() {
-  const due = dueDate();
-  const t = today();
-
-  const schedule = due ? checkupSchedule(due) : [];
   const bagKeys = HOSPITAL_BAG.flatMap((g) => g.items.map((i) => `bag:${i}`));
   const procKeys = PROCEDURES.flatMap((g) => g.items.map((i) => `proc:${i.title}`));
 
   return `
-    <section class="card">
-      <details ${isBorn(child()) ? '' : 'open'}>
-        <summary><h2>${icon('hospital')}妊婦健診スケジュール（目安）</h2></summary>
-        ${due ? `
-        <p class="muted small">〜23週: 4週に1回 / 24〜35週: 2週に1回 / 36週〜: 毎週。実際の日程は産院の指示に従ってください。</p>
-        <ul class="checklist">
-          ${schedule.map((c) => {
-            const past = diffDays(c.date, t) < 0;
-            const done = !!state.checkups[c.week];
-            return `<li class="${done ? 'done' : ''} ${past && !done ? 'past' : ''}"><label>
-              <input type="checkbox" data-action="checkup" data-week="${c.week}" ${done ? 'checked' : ''}>
-              <span>第${c.number}回・${c.week}週 <span class="muted">${formatDateJa(c.date)}ごろ</span></span>
-            </label></li>`;
-          }).join('')}
-        </ul>` : '<p class="muted">出産予定日を設定すると表示されます。</p>'}
-      </details>
-    </section>
+    ${renderSchedule()}
 
     <section class="card">
       <details>
@@ -1353,6 +1592,8 @@ function switchTab(tab) {
   if (currentTab === 'album' && tab !== 'album') markAlbumSeen();
   currentTab = tab;
   ui.editing = null;
+  ui.selecting = false;
+  ui.selected.clear();
   if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`);
   render({ keepScroll: false });
 }
@@ -1367,20 +1608,54 @@ setInterval(updateLive, 1000);
 
 // ---------- 設定 ----------
 
-async function openSettings() {
+const SETTINGS_TITLES = { menu: '設定', baby: '赤ちゃん', mom: 'ママ', family: '家族と共有', data: 'データの管理' };
+
+function fillSettingsForm() {
   const c = child();
   settingsForm.dueDate.value = c.dueDate || '';
   settingsForm.lmp.value = '';
   settingsForm.babyName.value = c.name || '';
   settingsForm.heightCm.value = state.profile.heightCm ?? '';
   settingsForm.preWeightKg.value = state.profile.preWeightKg ?? '';
-  dialogs.settings.showModal();
-  document.getElementById('import-label').hidden = !!account();
-  familyMembers = null;
-  renderFamilySection();
-  const est = await media.storageEstimate();
-  document.getElementById('storage-usage').textContent = est?.usage != null
-    ? `（使用量: 約${Math.round(est.usage / 1024 / 1024)}MB・写真${mine(state.media).length}枚）` : '';
+}
+
+// 設定のメニューに、それぞれの今の状態を短く表示する
+function updateSettingsMenu() {
+  const c = child();
+  const i = Math.max(0, state.children.findIndex((x) => x.id === c.id));
+  document.getElementById('menu-baby').textContent = `${childName(c, i)}・${childStatus(c)}${state.children.length > 1 ? `（${state.children.length}人）` : ''}`;
+  const { heightCm, preWeightKg } = state.profile;
+  document.getElementById('menu-mom').textContent = heightCm && preWeightKg ? `身長 ${heightCm}cm・妊娠前 ${preWeightKg}kg` : '身長・妊娠前の体重（未設定）';
+  const a = account();
+  document.getElementById('menu-family').textContent = a
+    ? `${a.groupName}・${ROLE_LABELS[a.role]}${a.error ? '（要確認）' : ''}` : 'パスキーでログインして家族と共有';
+  document.getElementById('menu-data').textContent = `写真・動画 ${state.media.length}件・バックアップ・削除`;
+}
+
+function showSettingsPage(page) {
+  settingsForm.querySelectorAll('[data-page]').forEach((el) => {
+    if (el.tagName !== 'BUTTON') el.hidden = el.dataset.page !== page;
+  });
+  document.getElementById('settings-title').textContent = SETTINGS_TITLES[page] || '設定';
+  dialogs.settings.querySelector('[data-action="settings-back"]').hidden = page === 'menu';
+  if (page === 'menu') updateSettingsMenu();
+  if (page === 'family') {
+    familyMembers = null;
+    renderFamilySection();
+  }
+  if (page === 'data') {
+    document.getElementById('import-label').hidden = !!account();
+    media.storageEstimate().then((est) => {
+      document.getElementById('storage-usage').textContent = est?.usage != null ? `（使用量: 約${Math.round(est.usage / 1024 / 1024)}MB）` : '';
+    });
+  }
+  dialogs.settings.querySelector('form').scrollTop = 0;
+}
+
+function openSettings(page = 'menu') {
+  fillSettingsForm();
+  showSettingsPage(canEdit() || page !== 'menu' ? page : 'menu');
+  if (!dialogs.settings.open) dialogs.settings.showModal();
 }
 
 settingsForm.lmp.addEventListener('change', () => {
@@ -1411,6 +1686,8 @@ settingsForm.addEventListener('submit', (e) => {
   selectedWeek = null;
   persist();
   render();
+  e.preventDefault(); // 閉じずにメニューへ戻る
+  showSettingsPage('menu');
   toast('保存しました');
 });
 
@@ -1586,7 +1863,7 @@ function deleteChild(id) {
   if (!c || state.children.length < 2) return;
   const counts = ['fetalRecords', 'growthRecords', 'milestones', 'media'].reduce((n, k) => n + state[k].filter((r) => r.childId === id).length, 0);
   if (!confirm(`${c.name || 'この子'}を削除しますか？記録・写真 ${counts} 件もすべて削除され、元に戻せません。`)) return;
-  for (const k of ['fetalRecords', 'growthRecords', 'milestones']) state[k] = state[k].filter((r) => r.childId !== id);
+  for (const k of ['fetalRecords', 'growthRecords', 'milestones', 'appointments']) state[k] = state[k].filter((r) => r.childId !== id);
   const mediaIds = state.media.filter((m) => m.childId === id).map((m) => m.id);
   state.media = state.media.filter((m) => m.childId !== id);
   mediaIds.forEach((m) => media.deleteFile(m).catch(() => {}));
@@ -1665,6 +1942,7 @@ function openMilestone({ id = null, templateId = null } = {}) {
   const r = id ? state.milestones.find((m) => m.id === id) : null;
   const t = milestoneTemplate(r?.templateId ?? templateId);
   milestoneForm.reset();
+  updatePickPreview(milestoneForm.photos);
   milestoneForm.id.value = r?.id || '';
   milestoneForm.templateId.value = r?.templateId || t?.id || '';
   milestoneForm.date.value = r?.date || todayStr();
@@ -1676,7 +1954,7 @@ function openMilestone({ id = null, templateId = null } = {}) {
   const old = milestoneForm.querySelector('.photo-strip');
   old?.remove();
   if (r?.photoIds?.length) {
-    milestoneForm.photos.closest('label').insertAdjacentHTML('afterend', photoStrip(r.photoIds));
+    milestoneForm.photos.closest('.photo-pick').insertAdjacentHTML('afterend', photoStrip(r.photoIds));
     media.hydrateImages(milestoneForm);
   }
   dialogs.milestone.showModal();
@@ -1731,6 +2009,7 @@ async function showViewerPhoto() {
   }
   const img = document.getElementById('viewer-img');
   const vid = document.getElementById('viewer-video');
+  viewerBody.classList.remove('zoomed');
   img.removeAttribute('src');
   vid.pause();
   vid.removeAttribute('src');
@@ -1791,11 +2070,43 @@ async function downloadViewerPhoto() {
   a.click();
 }
 
+// ダブルタップ（ダブルクリック）で拡大・縮小。拡大中は指でずらして見られる
+const viewerBody = dialogs.viewer.querySelector('.viewer-body');
+function setZoom(on, x = 0.5, y = 0.5) {
+  const img = document.getElementById('viewer-img');
+  if (img.hidden) return;
+  viewerBody.classList.toggle('zoomed', on);
+  if (on) {
+    requestAnimationFrame(() => {
+      viewerBody.scrollLeft = img.offsetWidth * x - viewerBody.clientWidth / 2;
+      viewerBody.scrollTop = img.offsetHeight * y - viewerBody.clientHeight / 2;
+    });
+  }
+}
+function zoomAt(e) {
+  const img = document.getElementById('viewer-img');
+  const r = img.getBoundingClientRect();
+  setZoom(!viewerBody.classList.contains('zoomed'), (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+}
+document.getElementById('viewer-img').addEventListener('dblclick', zoomAt);
+let lastTap = 0;
+
 // スワイプで前後の写真へ
 let touchX = null;
-dialogs.viewer.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+dialogs.viewer.addEventListener('touchstart', (e) => { touchX = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
 dialogs.viewer.addEventListener('touchend', (e) => {
-  if (touchX == null) return;
+  if (e.target.id === 'viewer-img' && e.changedTouches.length === 1) {
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      e.preventDefault();
+      zoomAt(e.changedTouches[0]);
+      lastTap = 0;
+      touchX = null;
+      return;
+    }
+    lastTap = now;
+  }
+  if (touchX == null || viewerBody.classList.contains('zoomed')) return;
   const dx = e.changedTouches[0].clientX - touchX;
   touchX = null;
   if (Math.abs(dx) < 50) return;
@@ -1811,6 +2122,10 @@ dialogs.viewer.addEventListener('touchend', (e) => {
 async function saveRecord(form, type, fields) {
   const date = form.date.value;
   if (!parseDate(date)) return;
+  if (type === 'fetalRecords') {
+    const out = fetalOutliers(form);
+    if (out.length && !confirm(`妊娠${Math.floor(fetalWeekOf(date))}週の目安から大きく外れている値があります。\n単位（mm・g）や桁を確認してください。\n\n${out.join('\n')}\n\nこのまま保存しますか？`)) return;
+  }
   const values = Object.fromEntries(fields.map(([k, d]) => [k, round(num(form[k].value), d)]));
   if (Object.values(values).every((v) => v == null || !(v > 0))) {
     toast('少なくとも1つの項目を入力してください');
@@ -2338,7 +2653,12 @@ document.querySelector('.tabbar').addEventListener('click', (e) => {
 });
 
 const ACTIONS = {
-  'open-settings': () => openSettings(),
+  'open-settings': (el) => openSettings(el.dataset.page || 'menu'),
+  'settings-page': (el) => showSettingsPage(el.dataset.page),
+  'settings-back': () => {
+    fillSettingsForm();
+    showSettingsPage('menu');
+  },
   'close-dialog': (el) => el.closest('dialog')?.close(),
   export: () => exportData(),
   'export-zip': () => exportZip(),
@@ -2384,6 +2704,10 @@ const ACTIONS = {
   'set-ui': (el) => {
     ui[el.dataset.key] = el.dataset.value;
     ui.editing = null;
+    if (el.dataset.key === 'albumView') {
+      ui.selecting = false;
+      ui.selected.clear();
+    }
     render();
   },
   'edit-record': (el) => {
@@ -2406,6 +2730,16 @@ const ACTIONS = {
     persist();
     render();
   },
+  'new-appt': () => openAppt(null),
+  'edit-appt': (el) => openAppt(el.dataset.key),
+  'delete-appt': () => {
+    const id = apptForm.id.value;
+    if (!id || !confirm(apptForm.slot.value === '' ? 'この予定を削除しますか？' : '設定した日付を消して、目安の表示に戻しますか？')) return;
+    store.remove(state, 'appointments', id);
+    persist();
+    dialogs.appt.close();
+    render();
+  },
   'new-milestone': (el) => openMilestone({ templateId: el.dataset.template || null }),
   'edit-milestone': (el) => openMilestone({ id: el.dataset.id }),
   'delete-milestone': () => {
@@ -2416,7 +2750,40 @@ const ACTIONS = {
     dialogs.milestone.close();
     render();
   },
-  'open-photo': (el) => openViewer(el.dataset.id),
+  'open-photo': (el) => {
+    if (ui.selecting && currentTab === 'album' && ui.albumView === 'photos') {
+      const id = el.dataset.id;
+      if (ui.selected.has(id)) ui.selected.delete(id);
+      else ui.selected.add(id);
+      render();
+      return;
+    }
+    openViewer(el.dataset.id);
+  },
+  'toggle-select': () => {
+    ui.selecting = !ui.selecting;
+    ui.selected.clear();
+    render();
+  },
+  'select-all': () => {
+    view.querySelectorAll('.photo-grid [data-action="open-photo"]').forEach((b) => ui.selected.add(b.dataset.id));
+    render();
+  },
+  'save-selected': () => saveSelected(),
+  'delete-selected': async () => {
+    const n = ui.selected.size;
+    if (!n || !confirm(`選んだ ${n} 件の写真・動画を削除しますか？この操作は取り消せません。`)) return;
+    for (const id of [...ui.selected]) await deletePhoto(id);
+    ui.selected.clear();
+    ui.selecting = false;
+    render();
+    toast(`${n}件を削除しました`);
+  },
+  'pick-clear': (el) => {
+    const input = el.closest('.photo-pick').querySelector('input[type="file"]');
+    input.value = '';
+    updatePickPreview(input);
+  },
   react: (el) => {
     toggleReaction(el.dataset.type, el.dataset.target, Number(el.dataset.i));
     rerenderSocial();
@@ -2536,10 +2903,24 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', async (e) => {
   const el = e.target;
+  if (el.dataset?.action === 'photo-month') {
+    ui.photoMonth = el.value;
+    render();
+    return;
+  }
+  if (el.dataset?.action === 'pick-preview') {
+    updatePickPreview(el);
+    return;
+  }
+  if (el.name === 'date' && el.form?.dataset.form === 'fetal') updateFetalPlaceholders(el.form);
   const { action } = el.dataset || {};
   if (action === 'check') {
     if (el.checked) state.checks[el.dataset.key] = true;
     else delete state.checks[el.dataset.key];
+    persist();
+    render();
+  } else if (action === 'appt-done') {
+    store.upsert(state.appointments, { id: el.dataset.id, done: el.checked });
     persist();
     render();
   } else if (action === 'checkup') {

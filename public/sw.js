@@ -1,5 +1,5 @@
 // オフラインでも使えるようにアプリ本体をキャッシュする
-const CACHE = 'sukusuku-v6';
+const CACHE = 'sukusuku-v8';
 const ASSETS = [
   './',
   'index.html',
