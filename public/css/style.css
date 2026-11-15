@@ -959,3 +959,11 @@ dialog.settings .data-tools { margin-top: 0; border-top: none; padding-top: 0; }
 .viewer-body img { touch-action: manipulation; cursor: zoom-in; }
 .viewer-body.zoomed img { cursor: zoom-out; }
 body:has(.select-bar) .toast { bottom: calc(var(--tabbar-h) + 80px + env(safe-area-inset-bottom)); }
+
+/* ---------- 健診・通院の予定 ---------- */
+.schedule li { display: flex; align-items: center; gap: 8px; }
+.schedule label { flex: 1; min-width: 0; }
+.schedule .when { font-variant-numeric: tabular-nums; }
+.schedule .when.set { color: var(--accent-strong); font-weight: 600; }
+.schedule li.done .when.set { color: var(--muted); font-weight: 400; }
+.schedule .btn { flex-shrink: 0; white-space: nowrap; }

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDate } from '../public/js/pregnancy.js';
+import { parseDate, checkupSchedule } from '../public/js/pregnancy.js';
 import {
-  ageOf, formatAge, periodOf, gestAtBirth, photoMonthOf, photoMonthLabel, buildTimeline, groupByPeriod, exifDate, MILESTONE_TEMPLATES,
+  ageOf, formatAge, periodOf, gestAtBirth, photoMonthOf, photoMonthLabel, mergeSchedule, nextScheduled, buildTimeline, groupByPeriod, exifDate, MILESTONE_TEMPLATES,
 } from '../public/js/growth.js';
 import {
   fetalEfwAt, fetalEfwSd, infantPercentilesAt, percentileBand, INFANT_PERCENTILES, fetalMeasureRange, FETAL_LIMITS,
@@ -215,4 +215,26 @@ test('fetal measurement ranges catch unit and digit mistakes', () => {
       assert.ok(r[0] >= FETAL_LIMITS[key].min && r[1] <= FETAL_LIMITS[key].max, `${key} ${w}週 ${r}`);
     }
   }
+});
+
+test('mergeSchedule: own dates replace estimates, custom appointments are merged by date', () => {
+  const std = checkupSchedule(parseDate('2026-12-20')); // 34週 = 2026-11-08, 36週 = 2026-11-22
+  const rows = mergeSchedule(std, [
+    { id: 'a1', date: '2026-11-11', time: '10:30', slot: 34, note: '採血あり' },
+    { id: 'a2', date: '2026-11-15', time: '', title: '歯科検診', slot: null },
+    { id: 'a3', date: '2027-01-20', title: '1か月健診', slot: null, done: false },
+  ], { 32: true });
+  const r34 = rows.find((r) => r.slot === 34);
+  assert.equal(r34.date, '2026-11-11');
+  assert.equal(r34.time, '10:30');
+  assert.equal(r34.title, `妊婦健診 第${r34.number}回`);
+  assert.equal(rows.find((r) => r.slot === 36).date, null); // 未設定は目安のまま
+  assert.ok(rows.find((r) => r.slot === 32).done);
+  const order = rows.map((r) => r.key);
+  assert.ok(order.indexOf('slot:34') < order.indexOf('appt:a2'));
+  assert.ok(order.indexOf('appt:a2') < order.indexOf('slot:36'));
+  assert.equal(order[order.length - 1], 'appt:a3');
+  assert.equal(nextScheduled(rows, '2026-11-09').key, 'slot:34'); // 目安（11/8）ではなく自分の日付で判定
+  assert.equal(nextScheduled(rows, '2026-11-12').key, 'appt:a2');
+  assert.equal(nextScheduled(rows, '2027-02-01'), null);
 });

@@ -1,12 +1,12 @@
 import {
   parseDate, formatDate, formatDateJa, today, addDays, diffDays,
-  dueDateFromLmp, gestationalAge, checkupSchedule, nextCheckup,
+  dueDateFromLmp, gestationalAge, checkupSchedule,
   contractionStats, formatDuration, weightGainGuide,
 } from './pregnancy.js';
 import { weekInfo, HOSPITAL_BAG, PROCEDURES, FOOD_NOTES, WARNING_SIGNS } from './data.js';
 import {
   uuid, ageOf, formatAge, isBorn, periodOf, gestAtBirth, MILESTONE_TEMPLATES, milestoneTemplate, photoMonthOf, photoMonthLabel,
-  buildTimeline, groupByPeriod, DAYS_PER_MONTH,
+  buildTimeline, groupByPeriod, DAYS_PER_MONTH, mergeSchedule, nextScheduled,
 } from './growth.js';
 import {
   fetalEfwAt, FETAL_EFW_RANGE, FETAL_EFW_SOURCE, hasInfantStandard, infantPercentilesAt, fetalMeasureRange, FETAL_LIMITS,
@@ -45,6 +45,7 @@ const dialogs = {
   settings: document.getElementById('settings'),
   birth: document.getElementById('birth'),
   milestone: document.getElementById('milestone'),
+  appt: document.getElementById('appt'),
   children: document.getElementById('children'),
   viewer: document.getElementById('viewer'),
 };
@@ -292,7 +293,7 @@ function renderHome() {
   const t = today();
   const ga = gestationalAge(due, t);
   const info = weekInfo(ga.week);
-  const next = nextCheckup(due, t);
+  const next = nextScheduled(scheduleRows(), todayStr());
   const pct = Math.round(ga.progress * 100);
   const lastFetal = mine(state.fetalRecords).sort(byDateDesc)[0];
 
@@ -343,12 +344,7 @@ function renderHome() {
       <p>${esc(info.tip)}</p>
     </section>
 
-    ${next ? `
-    <section class="card">
-      <h3>${icon('hospital')}次の妊婦健診（目安）</h3>
-      <p><strong>${formatDateJa(next.date)}</strong>（${next.week}週）</p>
-      <p class="muted small">${diffDays(next.date, t) === 0 ? '今日です' : `あと${diffDays(next.date, t)}日`}・実際の日程は産院の指示に従ってください</p>
-    </section>` : ''}
+    ${nextApptCard(next)}
 
     ${renderWarningCard()}`;
 }
@@ -383,6 +379,8 @@ function renderBabyHome() {
       <p>${esc(latest.date)}（${esc(periodLabel(latest.date))}）</p>
       <p>${growthValues(latest)}</p>
     </section>` : ''}
+
+    ${nextApptCard(nextScheduled(scheduleRows(), todayStr()))}
 
     ${events.length ? `
     <section class="card">
@@ -421,6 +419,113 @@ function sizeVisual(week) {
   const d = Math.round(14 + 58 * Math.sqrt(t));
   return `<div class="size-visual" aria-hidden="true"><span style="width:${d}px;height:${d}px"></span></div>`;
 }
+
+// ---------- 健診・通院の予定 ----------
+
+// 妊娠中は標準の妊婦健診（目安）に自分で入れた日付を重ねる。生まれてからは自分で入れた予定だけ
+function scheduleRows() {
+  const due = dueDate();
+  const standard = due && !isBorn(child()) ? checkupSchedule(due) : [];
+  return mergeSchedule(standard, mine(state.appointments), state.checkups);
+}
+
+const rowDate = (r) => (r.date ? parseDate(r.date) : r.estimate);
+// 「11月18日(水)」。今年でなければ年も付ける
+function shortDateJa(d) {
+  const w = ['日', '月', '火', '水', '木', '金', '土'][d.getUTCDay()];
+  const y = d.getUTCFullYear() === today().getUTCFullYear() ? '' : `${d.getUTCFullYear()}年`;
+  return `${y}${d.getUTCMonth() + 1}月${d.getUTCDate()}日(${w})`;
+}
+
+function nextApptCard(next) {
+  if (!next) return '';
+  const d = rowDate(next);
+  const days = diffDays(d, today());
+  return `
+    <section class="card link-card" data-action="goto-tab" data-tab="lists">
+      <h3>${icon('hospital')}次の予定${next.date ? '' : '（目安）'}</h3>
+      <p><strong>${formatDateJa(d)}${next.time ? ` ${esc(next.time)}` : ''}</strong>${next.date ? '' : 'ごろ'}</p>
+      <p>${esc(next.title)}${next.slot != null ? `・${next.slot}週` : ''}</p>
+      ${next.note ? `<p class="note">${esc(next.note)}</p>` : ''}
+      <p class="muted small">${days === 0 ? '今日です' : `あと${days}日`}${next.date ? '' : '・予約した日を「準備」タブで設定できます'}</p>
+    </section>`;
+}
+
+function renderSchedule() {
+  const rows = scheduleRows();
+  const t = todayStr();
+  const born = isBorn(child());
+  return `
+    <section class="card">
+      <details open>
+        <summary><h2>${icon('hospital')}健診・通院の予定</h2></summary>
+        ${born ? '' : (dueDate()
+    ? '<p class="muted small">日付が薄い色のものは標準的な間隔からの目安です。予約した日を入れると、その日付で表示されます。</p>'
+    : '<p class="muted small">出産予定日を設定すると、妊婦健診の目安が表示されます。</p>')}
+        ${rows.length ? `<ul class="checklist schedule">
+          ${rows.map((r) => {
+    const d = rowDate(r);
+    const past = formatDate(d) < t;
+    const check = r.slot != null
+      ? `data-action="checkup" data-week="${r.slot}"` : `data-action="appt-done" data-id="${esc(r.appointment.id)}"`;
+    return `<li class="${r.done ? 'done' : ''} ${past && !r.done ? 'past' : ''}">
+              <label>
+                <input type="checkbox" ${check} ${r.done ? 'checked' : ''} ${canEdit() || r.slot != null ? '' : 'disabled'} aria-label="${esc(r.title)}を済みにする">
+                <span>${esc(r.title)}${r.slot != null ? ` <span class="muted small">${r.slot}週</span>` : ''}
+                  <small class="${r.date ? 'when set' : 'when muted'}">${shortDateJa(d)}${r.date ? (r.time ? ` ${esc(r.time)}` : '') : 'ごろ'}</small>
+                  ${r.note ? `<small class="muted">${esc(r.note)}</small>` : ''}</span>
+              </label>
+              <button class="btn ghost tiny edit-only" data-action="edit-appt" data-key="${esc(r.key)}" aria-label="${esc(r.title)}の日付を${r.date ? '変更' : '設定'}">${r.date ? '変更' : '設定'}</button>
+            </li>`;
+  }).join('')}
+        </ul>` : '<p class="muted">予定はまだありません。</p>'}
+        <button class="btn ghost small edit-only" data-action="new-appt">${icon('plus')}予定を追加</button>
+      </details>
+    </section>`;
+}
+
+const apptForm = document.getElementById('appt-form');
+
+function openAppt(key) {
+  const row = key ? scheduleRows().find((r) => r.key === key) : null;
+  const a = row?.appointment;
+  apptForm.reset();
+  apptForm.id.value = a?.id || '';
+  apptForm.slot.value = row?.slot ?? '';
+  apptForm.title.value = row ? row.title : (isBorn(child()) ? '' : '妊婦健診');
+  apptForm.date.value = a?.date || (row ? formatDate(row.estimate) : todayStr());
+  apptForm.time.value = a?.time || '';
+  apptForm.note.value = a?.note || '';
+  document.getElementById('appt-title').textContent = row ? (a ? '予定を変更' : '日付を設定') : '予定を追加';
+  document.getElementById('appt-hint').textContent = row?.slot != null
+    ? `目安は ${formatDateJa(row.estimate)}ごろ（${row.slot}週）です。予約した日を入れてください。` : '';
+  const del = document.getElementById('delete-appt');
+  del.hidden = !a;
+  del.textContent = row?.slot != null ? '目安に戻す' : '削除';
+  apptForm.querySelectorAll('input, textarea').forEach((i) => { i.disabled = !canEdit(); });
+  dialogs.appt.showModal();
+}
+
+apptForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const date = apptForm.date.value;
+  const title = apptForm.title.value.trim();
+  if (!parseDate(date) || !title) return;
+  const slot = apptForm.slot.value === '' ? null : Number(apptForm.slot.value);
+  const existing = state.appointments.find((x) => x.id === apptForm.id.value);
+  store.upsert(state.appointments, {
+    ...(existing ? { id: existing.id } : { childId: child().id, done: false }),
+    date,
+    time: apptForm.time.value || '',
+    title,
+    note: apptForm.note.value.trim(),
+    slot,
+  });
+  persist();
+  dialogs.appt.close();
+  render();
+  toast('予定を保存しました');
+});
 
 function renderWarningCard() {
   return `
@@ -1421,31 +1526,11 @@ function progressText(keys) {
 }
 
 function renderLists() {
-  const due = dueDate();
-  const t = today();
-
-  const schedule = due ? checkupSchedule(due) : [];
   const bagKeys = HOSPITAL_BAG.flatMap((g) => g.items.map((i) => `bag:${i}`));
   const procKeys = PROCEDURES.flatMap((g) => g.items.map((i) => `proc:${i.title}`));
 
   return `
-    <section class="card">
-      <details ${isBorn(child()) ? '' : 'open'}>
-        <summary><h2>${icon('hospital')}妊婦健診スケジュール（目安）</h2></summary>
-        ${due ? `
-        <p class="muted small">〜23週: 4週に1回 / 24〜35週: 2週に1回 / 36週〜: 毎週。実際の日程は産院の指示に従ってください。</p>
-        <ul class="checklist">
-          ${schedule.map((c) => {
-            const past = diffDays(c.date, t) < 0;
-            const done = !!state.checkups[c.week];
-            return `<li class="${done ? 'done' : ''} ${past && !done ? 'past' : ''}"><label>
-              <input type="checkbox" data-action="checkup" data-week="${c.week}" ${done ? 'checked' : ''}>
-              <span>第${c.number}回・${c.week}週 <span class="muted">${formatDateJa(c.date)}ごろ</span></span>
-            </label></li>`;
-          }).join('')}
-        </ul>` : '<p class="muted">出産予定日を設定すると表示されます。</p>'}
-      </details>
-    </section>
+    ${renderSchedule()}
 
     <section class="card">
       <details>
@@ -1778,7 +1863,7 @@ function deleteChild(id) {
   if (!c || state.children.length < 2) return;
   const counts = ['fetalRecords', 'growthRecords', 'milestones', 'media'].reduce((n, k) => n + state[k].filter((r) => r.childId === id).length, 0);
   if (!confirm(`${c.name || 'この子'}を削除しますか？記録・写真 ${counts} 件もすべて削除され、元に戻せません。`)) return;
-  for (const k of ['fetalRecords', 'growthRecords', 'milestones']) state[k] = state[k].filter((r) => r.childId !== id);
+  for (const k of ['fetalRecords', 'growthRecords', 'milestones', 'appointments']) state[k] = state[k].filter((r) => r.childId !== id);
   const mediaIds = state.media.filter((m) => m.childId === id).map((m) => m.id);
   state.media = state.media.filter((m) => m.childId !== id);
   mediaIds.forEach((m) => media.deleteFile(m).catch(() => {}));
@@ -2645,6 +2730,16 @@ const ACTIONS = {
     persist();
     render();
   },
+  'new-appt': () => openAppt(null),
+  'edit-appt': (el) => openAppt(el.dataset.key),
+  'delete-appt': () => {
+    const id = apptForm.id.value;
+    if (!id || !confirm(apptForm.slot.value === '' ? 'この予定を削除しますか？' : '設定した日付を消して、目安の表示に戻しますか？')) return;
+    store.remove(state, 'appointments', id);
+    persist();
+    dialogs.appt.close();
+    render();
+  },
   'new-milestone': (el) => openMilestone({ templateId: el.dataset.template || null }),
   'edit-milestone': (el) => openMilestone({ id: el.dataset.id }),
   'delete-milestone': () => {
@@ -2822,6 +2917,10 @@ document.addEventListener('change', async (e) => {
   if (action === 'check') {
     if (el.checked) state.checks[el.dataset.key] = true;
     else delete state.checks[el.dataset.key];
+    persist();
+    render();
+  } else if (action === 'appt-done') {
+    store.upsert(state.appointments, { id: el.dataset.id, done: el.checked });
     persist();
     render();
   } else if (action === 'checkup') {

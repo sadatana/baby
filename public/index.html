@@ -171,6 +171,34 @@
     </form>
   </dialog>
 
+  <dialog id="appt" class="sheet">
+    <form id="appt-form" method="dialog">
+      <h2 id="appt-title">予定</h2>
+      <input type="hidden" name="id">
+      <input type="hidden" name="slot">
+      <p class="muted small" id="appt-hint"></p>
+      <label>予定の名前
+        <input type="text" name="title" maxlength="40" required placeholder="例: 妊婦健診、1か月健診">
+      </label>
+      <div class="row2">
+        <label>日付
+          <input type="date" name="date" required>
+        </label>
+        <label>時間（任意）
+          <input type="time" name="time">
+        </label>
+      </div>
+      <label>メモ（任意）
+        <textarea name="note" rows="2" maxlength="500" placeholder="持ち物、聞きたいことなど"></textarea>
+      </label>
+      <div class="actions">
+        <button type="button" class="btn danger edit-only" data-action="delete-appt" id="delete-appt">削除</button>
+        <button type="button" class="btn ghost" data-action="close-dialog">閉じる</button>
+        <button type="submit" class="btn primary edit-only">保存</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="milestone" class="sheet">
     <form id="milestone-form" method="dialog">
       <h2 id="milestone-title">できごとを記録</h2>

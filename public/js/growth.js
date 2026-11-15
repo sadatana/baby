@@ -236,3 +236,39 @@ function readTiffDate(v, tiff) {
   const s = `${m[1]}-${m[2]}-${m[3]}`;
   return parseDate(s) ? s : null;
 }
+
+// ---------- 健診・通院の予定 ----------
+
+// 標準の妊婦健診スケジュール（目安）と、自分で入れた予定を 1 つの一覧にまとめる（日付順）
+//   standard: [{ number, week, date: Date }]、appointments: [{ id, date, time, title, note, slot, done }]
+//   slot（妊婦健診の週）が一致する予定があれば、目安の日付の代わりにその日付を使う
+export function mergeSchedule(standard, appointments, doneSlots = {}) {
+  const bySlot = new Map(appointments.filter((a) => a.slot != null).map((a) => [Number(a.slot), a]));
+  const rows = standard.map((c) => {
+    const a = bySlot.get(c.week);
+    return {
+      key: `slot:${c.week}`,
+      slot: c.week,
+      number: c.number,
+      title: a?.title || `妊婦健診 第${c.number}回`,
+      date: a ? a.date : null,
+      estimate: c.date,
+      time: a?.time || '',
+      note: a?.note || '',
+      appointment: a || null,
+      done: !!doneSlots[c.week],
+    };
+  });
+  const slots = new Set(standard.map((c) => c.week));
+  for (const a of appointments) {
+    if (a.slot != null && slots.has(Number(a.slot))) continue;
+    rows.push({ key: `appt:${a.id}`, slot: null, number: null, title: a.title || '予定', date: a.date, estimate: null, time: a.time || '', note: a.note || '', appointment: a, done: !!a.done });
+  }
+  const sortKey = (r) => `${r.date || r.estimate.toISOString().slice(0, 10)} ${r.time || '99:99'}`;
+  return rows.sort((x, y) => sortKey(x).localeCompare(sortKey(y)));
+}
+
+// 今日以降で、まだ済んでいない最初の予定
+export function nextScheduled(rows, todayStr) {
+  return rows.find((r) => !r.done && (r.date || r.estimate.toISOString().slice(0, 10)) >= todayStr) || null;
+}
